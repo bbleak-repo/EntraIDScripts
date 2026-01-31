@@ -1,0 +1,5 @@
+Output/
+Tests/Output/
+*.log
+.DS_Store
+Thumbs.db

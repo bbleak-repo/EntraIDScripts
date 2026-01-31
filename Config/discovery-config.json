@@ -1,0 +1,11 @@
+{
+    "LdapPageSize": 1000,
+    "LdapTimeout": 120,
+    "MaxGroupCount": 5000,
+    "MaxGroupMemberCount": 1000,
+    "RetryCount": 1,
+    "RetryDelaySeconds": 5,
+    "DefaultOutputFormats": ["HTML", "JSON"],
+    "SkipModules": [],
+    "OutputDirectory": "Output"
+}
