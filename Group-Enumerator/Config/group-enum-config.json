@@ -1,0 +1,33 @@
+{
+    "LdapPageSize": 1000,
+    "LdapTimeout": 120,
+    "MaxMemberCount": 5000,
+    "SkipLargeGroups": true,
+    "LargeGroupThreshold": 5000,
+    "SkipGroups": ["Domain Users", "Domain Computers", "Authenticated Users"],
+    "FuzzyPrefixes": ["GG_", "USV_", "SG_", "DL_", "GL_"],
+    "FuzzyMinScore": 0.7,
+    "OutputDirectory": "Output",
+    "DefaultTheme": "dark",
+    "CachePath": "Cache",
+    "CacheEnabled": true,
+    "AllowInsecure": false,
+    "LogEnabled": true,
+    "LogPath": "Logs",
+    "LogLevel": "INFO",
+    "NestedGroupMaxDepth": 10,
+    "StaleAccountDays": 90,
+    "CorrelationStrategy": "email-first",
+    "AppMappingCsvPath": null,
+    "Email": {
+        "Enabled": false,
+        "SmtpServer": "",
+        "SmtpPort": 25,
+        "UseSsl": false,
+        "From": "",
+        "To": [],
+        "Cc": [],
+        "SubjectPrefix": "[Migration Readiness]",
+        "AttachReport": true
+    }
+}
