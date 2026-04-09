@@ -14,5 +14,20 @@
     "AllowInsecure": false,
     "LogEnabled": true,
     "LogPath": "Logs",
-    "LogLevel": "INFO"
+    "LogLevel": "INFO",
+    "NestedGroupMaxDepth": 10,
+    "StaleAccountDays": 90,
+    "CorrelationStrategy": "email-first",
+    "AppMappingCsvPath": null,
+    "Email": {
+        "Enabled": false,
+        "SmtpServer": "",
+        "SmtpPort": 25,
+        "UseSsl": false,
+        "From": "",
+        "To": [],
+        "Cc": [],
+        "SubjectPrefix": "[Migration Readiness]",
+        "AttachReport": true
+    }
 }
