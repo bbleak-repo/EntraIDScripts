@@ -194,18 +194,138 @@ function Import-GroupList {
 }
 
 
+# ---------------------------------------------------------------------------
+# Private helper: Resolve-MemberDnToRecord
+# Given a member DN, pick the right pooled context (cross-forest aware),
+# handle ForeignSecurityPrincipal indirection, and return a member record
+# hashtable in the standard shape expected by Get-GroupMembersDirect.
+# ---------------------------------------------------------------------------
+function script:Resolve-MemberDnToRecord {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory = $true)]  [string]$MemberDN,
+        [Parameter(Mandatory = $true)]  [hashtable]$LocalContext,
+        [Parameter(Mandatory = $true)]  [string]$LocalDomain,
+        [Parameter(Mandatory = $false)] [hashtable]$Pool,
+        [Parameter(Mandatory = $false)] [int]$TimeoutSeconds = 120
+    )
+
+    $userAttrs = @('sAMAccountName','displayName','mail','userAccountControl','distinguishedName')
+    $partial = @{
+        SamAccountName    = $null
+        DisplayName       = $null
+        Email             = $null
+        Enabled           = $null
+        Domain            = $LocalDomain
+        DistinguishedName = $MemberDN
+    }
+
+    # --- FSP indirection: resolve SID via foreign pooled context ---
+    if ($MemberDN -match 'CN=ForeignSecurityPrincipals') {
+        if (-not $Pool) { return $partial }
+        try {
+            $fspHit = Invoke-AdLdapSearch -Context $LocalContext -BaseDN $MemberDN -Scope Base `
+                -Filter '(objectClass=*)' `
+                -Attributes @('objectSid','distinguishedName') `
+                -BinaryAttributes @('objectSid') `
+                -TimeoutSeconds $TimeoutSeconds
+        } catch { return $partial }
+        if ($fspHit.Count -eq 0 -or -not $fspHit[0].ContainsKey('objectSid')) { return $partial }
+
+        $sidBytes = [byte[]]$fspHit[0].objectSid
+        $userSid  = ConvertTo-AdLdapSidString -SidBytes $sidBytes
+        # Foreign domain SID = user SID minus the trailing RID
+        $foreignDomainSid = $userSid -replace '-\d+$', ''
+
+        # Find pooled context whose domain SID matches
+        $target = $null
+        $targetDomain = $null
+        foreach ($entry in $Pool.Domains.GetEnumerator()) {
+            $ctx = $entry.Value
+            $poolSid = Get-AdLdapDomainSid -Pool $Pool -Context $ctx
+            if ($poolSid -and ($poolSid -eq $foreignDomainSid)) {
+                $target = $ctx
+                $targetDomain = $entry.Key
+                break
+            }
+        }
+        if (-not $target) { return $partial }
+
+        # Lookup in the foreign context by SID (binary filter)
+        $sidFilter = ConvertTo-AdLdapSidFilter -SidBytes $sidBytes
+        try {
+            $userHit = Invoke-AdLdapSearch -Context $target -BaseDN $target.BaseDN -Scope Subtree `
+                -Filter "(&(objectCategory=person)(objectSid=$sidFilter))" `
+                -Attributes $userAttrs `
+                -TimeoutSeconds $TimeoutSeconds
+        } catch { return $partial }
+        if ($userHit.Count -eq 0) { return $partial }
+
+        $m = $userHit[0]
+        $uac = if ($m.ContainsKey('userAccountControl')) { [int]$m.userAccountControl } else { 0 }
+        return @{
+            SamAccountName    = if ($m.ContainsKey('sAMAccountName')) { $m.sAMAccountName } else { $null }
+            DisplayName       = if ($m.ContainsKey('displayName'))    { $m.displayName }    else { $null }
+            Email             = if ($m.ContainsKey('mail'))           { $m.mail }           else { $null }
+            Enabled           = (($uac -band 2) -eq 0)
+            Domain            = $targetDomain
+            DistinguishedName = $m.DistinguishedName
+        }
+    }
+
+    # --- Direct cross-domain DN routing ---
+    # If the member DN lives in a different pooled domain, route to that context
+    $queryCtx    = $LocalContext
+    $queryDomain = $LocalDomain
+    if ($Pool) {
+        $routed = Get-AdLdapContextForDN -Pool $Pool -DistinguishedName $MemberDN
+        if ($routed -and $routed.BaseDN -ne $LocalContext.BaseDN) {
+            $queryCtx = $routed
+            # Find the domain key for the routed context
+            foreach ($entry in $Pool.Domains.GetEnumerator()) {
+                if ($entry.Value -eq $routed) { $queryDomain = $entry.Key; break }
+            }
+        }
+    }
+
+    try {
+        $hit = Invoke-AdLdapSearch -Context $queryCtx -BaseDN $MemberDN `
+            -Filter '(objectCategory=person)' -Scope Base `
+            -Attributes $userAttrs `
+            -TimeoutSeconds $TimeoutSeconds
+    } catch {
+        return $partial
+    }
+
+    if ($hit.Count -eq 0) { return $partial }
+    $m = $hit[0]
+    $uac = if ($m.ContainsKey('userAccountControl')) { [int]$m.userAccountControl } else { 0 }
+    return @{
+        SamAccountName    = if ($m.ContainsKey('sAMAccountName')) { $m.sAMAccountName } else { $null }
+        DisplayName       = if ($m.ContainsKey('displayName'))    { $m.displayName }    else { $null }
+        Email             = if ($m.ContainsKey('mail'))           { $m.mail }           else { $null }
+        Enabled           = (($uac -band 2) -eq 0)
+        Domain            = $queryDomain
+        DistinguishedName = $m.DistinguishedName
+    }
+}
+
 function Get-GroupMembersDirect {
     <#
     .SYNOPSIS
-        Low-level helper: enumerates group members via LdapConnection
+        Low-level group enumerator on top of ADLdap helpers.
 
     .DESCRIPTION
-        Uses the shared ADLdap helpers (New-AdLdapConnection / Invoke-AdLdapSearch)
-        which are built on System.DirectoryServices.Protocols.LdapConnection and
-        work against hardened DCs that enforce LDAP Channel Binding / Signing.
+        When a ConnectionPool is supplied, contexts are pulled from the pool
+        (opened lazily, reused, disposed by the pool owner). When no pool is
+        supplied, a one-shot connection is opened and closed for this call
+        (backward-compatible with the single-call mode used by unit tests).
 
-        Connection tiers (in order): LDAPS-Verified, LDAPS-Unverified (with
-        -AllowInsecure), LDAP 389 sign+seal (with -AllowInsecure).
+        Cross-forest member resolution is active when a pool is supplied:
+        member DNs routed to the correct pooled domain, and
+        ForeignSecurityPrincipal entries resolved by SID against the foreign
+        pooled context.
 
     .OUTPUTS
         Hashtable: @{ Members; DistinguishedName; MemberCount; Skipped; SkipReason; Errors }
@@ -213,17 +333,11 @@ function Get-GroupMembersDirect {
     [CmdletBinding()]
     [OutputType([hashtable])]
     param(
-        [Parameter(Mandatory = $true)]
-        [string]$Domain,
-
-        [Parameter(Mandatory = $true)]
-        [string]$GroupName,
-
-        [Parameter(Mandatory = $false)]
-        [PSCredential]$Credential,
-
-        [Parameter(Mandatory = $false)]
-        [hashtable]$Config = @{}
+        [Parameter(Mandatory = $true)]  [string]$Domain,
+        [Parameter(Mandatory = $true)]  [string]$GroupName,
+        [Parameter(Mandatory = $false)] [PSCredential]$Credential,
+        [Parameter(Mandatory = $false)] [hashtable]$Config = @{},
+        [Parameter(Mandatory = $false)] [hashtable]$ConnectionPool
     )
 
     $errors      = @()
@@ -231,7 +345,6 @@ function Get-GroupMembersDirect {
     $groupDN     = $null
     $memberCount = 0
 
-    # Config values with defaults
     $pageSize         = if ($Config.LdapPageSize)              { $Config.LdapPageSize }        else { 1000 }
     $timeoutSeconds   = if ($Config.LdapTimeout)               { $Config.LdapTimeout }         else { 120 }
     $maxMemberCount   = if ($Config.MaxMemberCount)            { $Config.MaxMemberCount }      else { 5000 }
@@ -240,33 +353,35 @@ function Get-GroupMembersDirect {
     $skipGroupNames   = if ($Config.SkipGroups)                { $Config.SkipGroups }          else { @() }
     $allowInsecure    = if ($null -ne $Config.AllowInsecure)   { $Config.AllowInsecure }       else { $false }
 
-    # Well-known skip list
     if ($skipGroupNames -contains $GroupName) {
         return @{
-            Members           = @()
-            DistinguishedName = $null
-            MemberCount       = 0
-            Skipped           = $true
-            SkipReason        = "Group '$GroupName' is in the SkipGroups list"
-            Errors            = @()
+            Members = @(); DistinguishedName = $null; MemberCount = 0
+            Skipped = $true
+            SkipReason = "Group '$GroupName' is in the SkipGroups list"
+            Errors = @()
         }
     }
 
     $ctx = $null
+    $ownCtx = $false    # true when we opened the ctx ourselves (must close in finally)
     try {
         Write-GroupEnumLog -Level 'DEBUG' -Operation 'LdapConnect' `
-            -Message "Opening LDAP connection to '$Domain'" `
-            -Context @{ domain = $Domain; groupName = $GroupName; allowInsecure = $allowInsecure }
-
-        $connParams = @{
-            Server         = $Domain
-            TimeoutSeconds = $timeoutSeconds
-        }
-        if ($Credential)    { $connParams.Credential    = $Credential }
-        if ($allowInsecure) { $connParams.AllowInsecure = $true }
+            -Message "Obtaining LDAP connection to '$Domain'" `
+            -Context @{ domain = $Domain; groupName = $GroupName; pooled = [bool]$ConnectionPool }
 
         try {
-            $ctx = New-AdLdapConnection @connParams
+            if ($ConnectionPool) {
+                $ctx = Get-AdLdapPooledContext -Pool $ConnectionPool -Domain $Domain
+            } else {
+                $connParams = @{
+                    Server         = $Domain
+                    TimeoutSeconds = $timeoutSeconds
+                }
+                if ($Credential)    { $connParams.Credential    = $Credential }
+                if ($allowInsecure) { $connParams.AllowInsecure = $true }
+                $ctx = New-AdLdapConnection @connParams
+                $ownCtx = $true
+            }
         } catch {
             Write-GroupEnumLog -Level 'ERROR' -Operation 'LdapConnect' `
                 -Message "Could not connect to '$Domain'" `
@@ -275,14 +390,14 @@ function Get-GroupMembersDirect {
         }
 
         Write-GroupEnumLog -Level 'INFO' -Operation 'LdapConnect' `
-            -Message "Connected to '$Domain' via $($ctx.Tier)" `
-            -Context @{ domain = $Domain; tier = $ctx.Tier; port = $ctx.Port; baseDN = $ctx.BaseDN }
+            -Message "Using connection to '$Domain' via $($ctx.Tier)" `
+            -Context @{ domain = $Domain; tier = $ctx.Tier; port = $ctx.Port; baseDN = $ctx.BaseDN; pooled = (-not $ownCtx) }
 
         if ($ctx.Tier -ne 'LDAPS-Verified') {
             $errors += "WARNING: Using tier '$($ctx.Tier)' (port $($ctx.Port)) for domain '$Domain'. Verified LDAPS was not available."
         }
 
-        # Step 1: Find the group
+        # Find the group
         $groupHits = Invoke-AdLdapSearch -Context $ctx `
             -Filter "(&(objectCategory=group)(cn=$GroupName))" `
             -Attributes @('distinguishedName','cn','member') `
@@ -290,12 +405,10 @@ function Get-GroupMembersDirect {
 
         if ($groupHits.Count -eq 0) {
             return @{
-                Members           = @()
-                DistinguishedName = $null
-                MemberCount       = 0
-                Skipped           = $true
-                SkipReason        = "Group '$GroupName' not found in domain '$Domain'"
-                Errors            = $errors + @("Group not found")
+                Members = @(); DistinguishedName = $null; MemberCount = 0
+                Skipped = $true
+                SkipReason = "Group '$GroupName' not found in domain '$Domain'"
+                Errors = $errors + @("Group not found")
             }
         }
 
@@ -309,19 +422,15 @@ function Get-GroupMembersDirect {
         }
         $memberCount = $rawMemberDNs.Count
 
-        # Step 2: Check large-group threshold
         if ($skipLargeGroups -and $memberCount -ge $largeGroupThresh) {
             return @{
-                Members           = @()
-                DistinguishedName = $groupDN
-                MemberCount       = $memberCount
-                Skipped           = $true
-                SkipReason        = "Group '$GroupName' has $memberCount members (threshold: $largeGroupThresh)"
-                Errors            = $errors
+                Members = @(); DistinguishedName = $groupDN; MemberCount = $memberCount
+                Skipped = $true
+                SkipReason = "Group '$GroupName' has $memberCount members (threshold: $largeGroupThresh)"
+                Errors = $errors
             }
         }
 
-        # Cap member retrieval at MaxMemberCount
         $memberDNsToQuery = if ($rawMemberDNs.Count -gt $maxMemberCount) {
             $errors += "Warning: Member count ($($rawMemberDNs.Count)) exceeds MaxMemberCount ($maxMemberCount). Results truncated."
             $rawMemberDNs[0..($maxMemberCount - 1)]
@@ -329,39 +438,12 @@ function Get-GroupMembersDirect {
             $rawMemberDNs
         }
 
-        # Step 3: Resolve each member DN
         foreach ($memberDN in $memberDNsToQuery) {
             try {
-                $hit = Invoke-AdLdapSearch -Context $ctx -BaseDN $memberDN `
-                    -Filter '(objectCategory=person)' -Scope Base `
-                    -Attributes @('sAMAccountName','displayName','mail','userAccountControl','distinguishedName') `
-                    -TimeoutSeconds $timeoutSeconds
-
-                if ($hit.Count -gt 0) {
-                    $m = $hit[0]
-                    $uac = if ($m.ContainsKey('userAccountControl')) { [int]$m.userAccountControl } else { 0 }
-                    # Bit 2 (0x0002) of UAC = ACCOUNTDISABLE
-                    $enabled = (($uac -band 2) -eq 0)
-
-                    $members += @{
-                        SamAccountName    = if ($m.ContainsKey('sAMAccountName')) { $m.sAMAccountName } else { $null }
-                        DisplayName       = if ($m.ContainsKey('displayName'))    { $m.displayName }    else { $null }
-                        Email             = if ($m.ContainsKey('mail'))           { $m.mail }           else { $null }
-                        Enabled           = $enabled
-                        Domain            = $Domain
-                        DistinguishedName = $m.DistinguishedName
-                    }
-                } else {
-                    # Nested group, contact, computer, or similar. Include partial entry.
-                    $members += @{
-                        SamAccountName    = $null
-                        DisplayName       = $null
-                        Email             = $null
-                        Enabled           = $null
-                        Domain            = $Domain
-                        DistinguishedName = $memberDN
-                    }
-                }
+                $record = Resolve-MemberDnToRecord -MemberDN $memberDN `
+                    -LocalContext $ctx -LocalDomain $Domain `
+                    -Pool $ConnectionPool -TimeoutSeconds $timeoutSeconds
+                $members += $record
             } catch {
                 $errors += "Failed to query member '$memberDN': $($_.Exception.Message.Trim())"
             }
@@ -377,7 +459,7 @@ function Get-GroupMembersDirect {
         }
 
     } finally {
-        if ($ctx) { Close-AdLdapConnection $ctx }
+        if ($ctx -and $ownCtx) { Close-AdLdapConnection $ctx }
     }
 }
 
@@ -423,7 +505,10 @@ function Get-GroupMembers {
         [PSCredential]$Credential,
 
         [Parameter(Mandatory = $false)]
-        [hashtable]$Config = @{}
+        [hashtable]$Config = @{},
+
+        [Parameter(Mandatory = $false)]
+        [hashtable]$ConnectionPool
     )
 
     $errors = @()
@@ -443,8 +528,14 @@ function Get-GroupMembers {
     }
 
     try {
-        $raw = Get-GroupMembersDirect -Domain $Domain -GroupName $GroupName `
-            -Credential $Credential -Config $Config
+        $directParams = @{
+            Domain     = $Domain
+            GroupName  = $GroupName
+            Credential = $Credential
+            Config     = $Config
+        }
+        if ($ConnectionPool) { $directParams.ConnectionPool = $ConnectionPool }
+        $raw = Get-GroupMembersDirect @directParams
 
         if ($raw.Errors.Count -gt 0) {
             $errors += $raw.Errors

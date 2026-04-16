@@ -158,7 +158,10 @@ function Get-AccountStaleness {
         [PSCredential]$Credential,
 
         [Parameter(Mandatory = $false)]
-        [hashtable]$Config = @{}
+        [hashtable]$Config = @{},
+
+        [Parameter(Mandatory = $false)]
+        [hashtable]$ConnectionPool
     )
 
     $errors = @()
@@ -180,22 +183,27 @@ function Get-AccountStaleness {
         -Message "Starting staleness check for $($Members.Count) member(s) in domain '$Domain'" `
         -Context @{ domain = $Domain; memberCount = $Members.Count; staleDays = $staleDays; cutoff = $cutoffDate.ToString('yyyy-MM-dd') }
 
-    # Open a single LdapConnection and reuse it across all per-member Base-scope queries.
+    # Open (or acquire from pool) a single LdapConnection and reuse it across all per-member Base-scope queries.
     $ctx = $null
+    $ownCtx = $false
     try {
         Write-GroupEnumLog -Level 'DEBUG' -Operation 'LdapConnect' `
-            -Message "Opening LDAP connection to '$Domain'" `
-            -Context @{ domain = $Domain; allowInsecure = $allowInsecure }
-
-        $connParams = @{
-            Server         = $Domain
-            TimeoutSeconds = $timeoutSeconds
-        }
-        if ($Credential)    { $connParams.Credential    = $Credential }
-        if ($allowInsecure) { $connParams.AllowInsecure = $true }
+            -Message "Obtaining LDAP connection to '$Domain'" `
+            -Context @{ domain = $Domain; allowInsecure = $allowInsecure; pooled = [bool]$ConnectionPool }
 
         try {
-            $ctx = New-AdLdapConnection @connParams
+            if ($ConnectionPool) {
+                $ctx = Get-AdLdapPooledContext -Pool $ConnectionPool -Domain $Domain
+            } else {
+                $connParams = @{
+                    Server         = $Domain
+                    TimeoutSeconds = $timeoutSeconds
+                }
+                if ($Credential)    { $connParams.Credential    = $Credential }
+                if ($allowInsecure) { $connParams.AllowInsecure = $true }
+                $ctx = New-AdLdapConnection @connParams
+                $ownCtx = $true
+            }
         } catch {
             Write-GroupEnumLog -Level 'ERROR' -Operation 'LdapConnect' `
                 -Message "Could not connect to '$Domain'" `
@@ -219,7 +227,7 @@ function Get-AccountStaleness {
 
         Write-GroupEnumLog -Level 'INFO' -Operation 'LdapConnect' `
             -Message "Connected to '$Domain' via $($ctx.Tier)" `
-            -Context @{ domain = $Domain; tier = $ctx.Tier; port = $ctx.Port; baseDN = $ctx.BaseDN }
+            -Context @{ domain = $Domain; tier = $ctx.Tier; port = $ctx.Port; baseDN = $ctx.BaseDN; pooled = (-not $ownCtx) }
 
         if ($ctx.Tier -ne 'LDAPS-Verified') {
             $errors += "WARNING: Using tier '$($ctx.Tier)' (port $($ctx.Port)) for domain '$Domain'. Verified LDAPS was not available."
@@ -354,7 +362,7 @@ function Get-AccountStaleness {
     }
 
     } finally {
-        if ($ctx) { Close-AdLdapConnection $ctx }
+        if ($ctx -and $ownCtx) { Close-AdLdapConnection $ctx }
     }
 
     $disabledCount      = $disabled.Count

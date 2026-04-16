@@ -248,6 +248,9 @@ function Invoke-AdLdapSearch {
         [string[]]$Attributes = @(),
 
         [Parameter(Mandatory = $false)]
+        [string[]]$BinaryAttributes = @(),
+
+        [Parameter(Mandatory = $false)]
         [ValidateSet('Base', 'OneLevel', 'Subtree')]
         [string]$Scope = 'Subtree',
 
@@ -298,10 +301,25 @@ function Invoke-AdLdapSearch {
             if (-not $entry.DistinguishedName) { continue }
 
             $h = @{ DistinguishedName = [string]$entry.DistinguishedName }
+            # Case-insensitive set for binary attr lookup
+            $binarySet = @{}
+            foreach ($b in $BinaryAttributes) { $binarySet[$b.ToLowerInvariant()] = $true }
+
             foreach ($attrName in $entry.Attributes.AttributeNames) {
                 $attr = $entry.Attributes[$attrName]
                 if ($attr.Count -eq 0) { continue }
-                if ($attr.Count -eq 1) {
+
+                $isBinary = $binarySet.ContainsKey(([string]$attrName).ToLowerInvariant())
+
+                if ($isBinary) {
+                    # Return byte[] (single) or byte[][] (multi)
+                    $byteValues = $attr.GetValues([byte[]])
+                    if ($byteValues.Count -eq 1) {
+                        $h[$attrName] = [byte[]]$byteValues[0]
+                    } else {
+                        $h[$attrName] = $byteValues
+                    }
+                } elseif ($attr.Count -eq 1) {
                     $h[$attrName] = [string]$attr[0]
                 } else {
                     $vals = New-Object System.Collections.Generic.List[string]
@@ -391,4 +409,222 @@ function Close-AdLdapConnection {
     if ($Context -and $Context.Connection) {
         try { $Context.Connection.Dispose() } catch { }
     }
+}
+
+# ---------------------------------------------------------------------------
+# Public: New-AdLdapConnectionPool
+# ---------------------------------------------------------------------------
+function New-AdLdapConnectionPool {
+    <#
+    .SYNOPSIS
+        Creates an empty connection pool for reuse across multiple queries.
+
+    .DESCRIPTION
+        A pool is an ordered hashtable keyed by domain name. Entries are added
+        lazily by Get-AdLdapPooledContext when first requested, and disposed
+        collectively by Close-AdLdapConnectionPool. A pool also tracks the
+        credential and insecure-fallback flags to apply when opening new
+        contexts on demand.
+
+    .PARAMETER Credential
+        Optional PSCredential to use for all contexts opened through this pool.
+
+    .PARAMETER AllowInsecure
+        Enables LDAPS cert-bypass and LDAP 389 sign+seal fallback tiers for
+        all contexts opened through this pool.
+
+    .PARAMETER TimeoutSeconds
+        Default timeout for bind + search on pooled contexts.
+
+    .OUTPUTS
+        Hashtable with Domains (ordered dict), Credential, AllowInsecure,
+        TimeoutSeconds, and DomainSidCache fields.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory = $false)]
+        [PSCredential]$Credential,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$AllowInsecure,
+
+        [Parameter(Mandatory = $false)]
+        [int]$TimeoutSeconds = 120
+    )
+    return @{
+        Domains         = [ordered]@{}     # key = domain (lowercase) → context hashtable
+        Credential      = $Credential
+        AllowInsecure   = [bool]$AllowInsecure
+        TimeoutSeconds  = $TimeoutSeconds
+        DomainSidCache  = @{}              # key = domain → domain SID string (lazy)
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Public: Get-AdLdapPooledContext
+# ---------------------------------------------------------------------------
+function Get-AdLdapPooledContext {
+    <#
+    .SYNOPSIS
+        Returns the pooled LdapConnection context for a given domain, opening
+        a new connection on first access.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Pool,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Domain
+    )
+    $key = $Domain.ToLowerInvariant()
+    if ($Pool.Domains.Contains($key)) {
+        return $Pool.Domains[$key]
+    }
+
+    $connParams = @{
+        Server         = $Domain
+        TimeoutSeconds = $Pool.TimeoutSeconds
+    }
+    if ($Pool.Credential)    { $connParams.Credential    = $Pool.Credential }
+    if ($Pool.AllowInsecure) { $connParams.AllowInsecure = $true }
+
+    $ctx = New-AdLdapConnection @connParams
+    $Pool.Domains[$key] = $ctx
+    return $ctx
+}
+
+# ---------------------------------------------------------------------------
+# Public: Close-AdLdapConnectionPool
+# ---------------------------------------------------------------------------
+function Close-AdLdapConnectionPool {
+    <#
+    .SYNOPSIS
+        Disposes every LdapConnection in a pool. Safe on $null.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $false, ValueFromPipeline = $true)]
+        [hashtable]$Pool
+    )
+    if (-not $Pool) { return }
+    foreach ($ctx in $Pool.Domains.Values) {
+        Close-AdLdapConnection $ctx
+    }
+    $Pool.Domains.Clear()
+}
+
+# ---------------------------------------------------------------------------
+# Public: Get-AdLdapContextForDN
+# ---------------------------------------------------------------------------
+function Get-AdLdapContextForDN {
+    <#
+    .SYNOPSIS
+        Returns the pooled context whose BaseDN is the parent of the given
+        distinguished name, or $null if no pooled domain owns it.
+
+    .DESCRIPTION
+        Cross-forest / cross-domain queries need to route a member DN to the
+        right connection. This walks every pooled context and picks the one
+        whose BaseDN is a suffix of $DistinguishedName. The longest matching
+        suffix wins so a child domain wins over its parent.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Pool,
+
+        [Parameter(Mandatory = $true)]
+        [string]$DistinguishedName
+    )
+    $dnLower = $DistinguishedName.ToLowerInvariant()
+    $best = $null
+    $bestLen = -1
+    foreach ($ctx in $Pool.Domains.Values) {
+        if (-not $ctx.BaseDN) { continue }
+        $base = $ctx.BaseDN.ToLowerInvariant()
+        if ($dnLower.EndsWith(',' + $base) -or $dnLower -eq $base) {
+            if ($base.Length -gt $bestLen) {
+                $best = $ctx
+                $bestLen = $base.Length
+            }
+        }
+    }
+    return $best
+}
+
+# ---------------------------------------------------------------------------
+# Public: ConvertTo-AdLdapSidString
+# ---------------------------------------------------------------------------
+function ConvertTo-AdLdapSidString {
+    <#
+    .SYNOPSIS
+        Converts a binary SID (byte[]) to its string form ('S-1-5-...').
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte[]]$SidBytes
+    )
+    return (New-Object System.Security.Principal.SecurityIdentifier($SidBytes, 0)).Value
+}
+
+# ---------------------------------------------------------------------------
+# Public: ConvertTo-AdLdapSidFilter
+# ---------------------------------------------------------------------------
+function ConvertTo-AdLdapSidFilter {
+    <#
+    .SYNOPSIS
+        Converts a binary SID to an LDAP-escaped byte filter value, e.g.
+        '\01\05\00\00\00\00\00\05...'. Use this to build '(objectSid=<val>)'
+        filters since AD matches SIDs byte-wise, not by string.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [byte[]]$SidBytes
+    )
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($b in $SidBytes) { [void]$sb.Append(('\{0:x2}' -f $b)) }
+    return $sb.ToString()
+}
+
+# ---------------------------------------------------------------------------
+# Public: Get-AdLdapDomainSid
+# ---------------------------------------------------------------------------
+function Get-AdLdapDomainSid {
+    <#
+    .SYNOPSIS
+        Returns the domain SID (as a string, e.g. 'S-1-5-21-aaa-bbb-ccc') for
+        a pooled context, reading objectSid from the domain's defaultNamingContext.
+        Cached on the pool.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Pool,
+
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Context
+    )
+    $key = $Context.BaseDN.ToLowerInvariant()
+    if ($Pool.DomainSidCache.ContainsKey($key)) {
+        return $Pool.DomainSidCache[$key]
+    }
+    $hits = Invoke-AdLdapSearch -Context $Context -BaseDN $Context.BaseDN -Scope Base `
+        -Filter '(objectClass=*)' `
+        -Attributes @('objectSid') -BinaryAttributes @('objectSid')
+    if ($hits.Count -eq 0 -or -not $hits[0].ContainsKey('objectSid')) {
+        $Pool.DomainSidCache[$key] = $null
+        return $null
+    }
+    $sidString = ConvertTo-AdLdapSidString -SidBytes ([byte[]]$hits[0].objectSid)
+    $Pool.DomainSidCache[$key] = $sidString
+    return $sidString
 }

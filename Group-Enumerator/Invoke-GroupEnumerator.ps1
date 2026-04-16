@@ -199,6 +199,7 @@ Write-Host ''
 # ---------------------------------------------------------------------------
 # Main execution
 # ---------------------------------------------------------------------------
+$connectionPool = $null
 try {
     # ---- Load configuration ----
     Write-Host 'Loading configuration...' -ForegroundColor Cyan
@@ -374,6 +375,16 @@ try {
         $totalProcessed = 0
         $totalInList    = $groupList.Count
 
+        # Shared connection pool: one LdapConnection per domain, reused across
+        # all groups in that domain. Also enables cross-forest member routing
+        # and ForeignSecurityPrincipal SID resolution between pooled domains.
+        $poolParams = @{
+            AllowInsecure  = [bool]$config.AllowInsecure
+            TimeoutSeconds = [int]$config.LdapTimeout
+        }
+        if ($Credential) { $poolParams.Credential = $Credential }
+        $connectionPool = New-AdLdapConnectionPool @poolParams
+
         foreach ($entry in $groupList) {
             $totalProcessed++
             $progressPct = [int](($totalProcessed / $totalInList) * 100)
@@ -381,9 +392,10 @@ try {
 
             try {
                 $enumParams = @{
-                    Domain    = $entry.Domain
-                    GroupName = $entry.GroupName
-                    Config    = $config
+                    Domain         = $entry.Domain
+                    GroupName      = $entry.GroupName
+                    Config         = $config
+                    ConnectionPool = $connectionPool
                 }
                 if ($Credential) {
                     $enumParams.Credential = $Credential
@@ -516,9 +528,10 @@ try {
             if ($groupResult.Data.Skipped -or $groupResult.Errors.Count -gt 0) { continue }
 
             $nestedParams = @{
-                Domain    = $groupResult.Data.Domain
-                GroupName = $groupResult.Data.GroupName
-                Config    = $config
+                Domain         = $groupResult.Data.Domain
+                GroupName      = $groupResult.Data.GroupName
+                Config         = $config
+                ConnectionPool = $connectionPool
             }
             if ($Credential) { $nestedParams.Credential = $Credential }
 
@@ -577,9 +590,10 @@ try {
             $staleConfig.StaleAccountDays = $staleDays
 
             $staleParams = @{
-                Members = $groupResult.Data.Members
-                Domain  = $groupResult.Data.Domain
-                Config  = $staleConfig
+                Members        = $groupResult.Data.Members
+                Domain         = $groupResult.Data.Domain
+                Config         = $staleConfig
+                ConnectionPool = $connectionPool
             }
             if ($Credential) { $staleParams.Credential = $Credential }
 
@@ -1047,4 +1061,8 @@ try {
         }
     $null = Close-GroupEnumLog -Summary @{ fatalError = $_.ToString() }
     exit 1
+} finally {
+    if ($connectionPool) {
+        try { Close-AdLdapConnectionPool $connectionPool } catch { }
+    }
 }

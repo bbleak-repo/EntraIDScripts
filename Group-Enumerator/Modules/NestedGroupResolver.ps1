@@ -325,6 +325,9 @@ function Resolve-NestedGroupMembers {
         [hashtable]$Config = @{},
 
         [Parameter(Mandatory = $false)]
+        [hashtable]$ConnectionPool,
+
+        [Parameter(Mandatory = $false)]
         [int]$MaxDepth = 0
     )
 
@@ -368,24 +371,49 @@ function Resolve-NestedGroupMembers {
 
     # Step 1: Open LDAP connection and find the root group DN
     $ctx = $null
+    $ownCtx = $false
     $flatMembersArray = @()
     $nestedGroups     = [System.Collections.ArrayList]::new()
     $maxDepthReached  = $false
     $totalUsers       = 0
 
     try {
-        $connOpen = script:Open-NestedResolverLdap -Domain $Domain -Credential $Credential -Config $Config
-        if (-not $connOpen.Ctx) {
-            return @{
-                FlatMembers     = @()
-                NestedGroups    = @()
-                MaxDepthReached = $false
-                TotalUsersFound = 0
-                Errors          = @($connOpen.Error)
+        if ($ConnectionPool) {
+            try {
+                $ctx = Get-AdLdapPooledContext -Pool $ConnectionPool -Domain $Domain
+            } catch {
+                Write-GroupEnumLog -Level 'ERROR' -Operation 'LdapConnect' `
+                    -Message "Could not obtain pooled connection to '$Domain'" `
+                    -Context @{ domain = $Domain; error = $_.ToString() }
+                return @{
+                    FlatMembers     = @()
+                    NestedGroups    = @()
+                    MaxDepthReached = $false
+                    TotalUsersFound = 0
+                    Errors          = @("Failed to connect to domain '$Domain': $($_.ToString())")
+                }
             }
+            Write-GroupEnumLog -Level 'INFO' -Operation 'LdapConnect' `
+                -Message "Using pooled connection to '$Domain' via $($ctx.Tier)" `
+                -Context @{ domain = $Domain; tier = $ctx.Tier; port = $ctx.Port; baseDN = $ctx.BaseDN; pooled = $true }
+            if ($ctx.Tier -ne 'LDAPS-Verified') {
+                $errors += "WARNING: Using tier '$($ctx.Tier)' (port $($ctx.Port)) for domain '$Domain'. Verified LDAPS was not available."
+            }
+        } else {
+            $connOpen = script:Open-NestedResolverLdap -Domain $Domain -Credential $Credential -Config $Config
+            if (-not $connOpen.Ctx) {
+                return @{
+                    FlatMembers     = @()
+                    NestedGroups    = @()
+                    MaxDepthReached = $false
+                    TotalUsersFound = 0
+                    Errors          = @($connOpen.Error)
+                }
+            }
+            if ($connOpen.Error) { $errors += $connOpen.Error }
+            $ctx = $connOpen.Ctx
+            $ownCtx = $true
         }
-        if ($connOpen.Error) { $errors += $connOpen.Error }
-        $ctx = $connOpen.Ctx
 
         $rootGroupDN = $null
         try {
@@ -456,7 +484,7 @@ function Resolve-NestedGroupMembers {
         $totalUsers       = $flatMembersArray.Count
 
     } finally {
-        if ($ctx) { Close-AdLdapConnection $ctx }
+        if ($ctx -and $ownCtx) { Close-AdLdapConnection $ctx }
     }
 
     # Determine whether max depth was reached by checking if any nested group
@@ -555,6 +583,9 @@ function Get-NestedGroupTree {
         [hashtable]$Config = @{},
 
         [Parameter(Mandatory = $false)]
+        [hashtable]$ConnectionPool,
+
+        [Parameter(Mandatory = $false)]
         [int]$MaxDepth = 0
     )
 
@@ -577,21 +608,45 @@ function Get-NestedGroupTree {
 
     # Locate root group
     $ctx = $null
+    $ownCtx = $false
     $nodes      = [System.Collections.ArrayList]::new()
     $rootGroupDN = $null
 
     try {
-        $connOpen = script:Open-NestedResolverLdap -Domain $Domain -Credential $Credential -Config $Config
-        if (-not $connOpen.Ctx) {
-            return @{
-                RootGroup = @{ Name = $GroupName; DN = $null }
-                Nodes     = @()
-                MaxDepth  = $resolvedMaxDepth
-                Errors    = @($connOpen.Error)
+        if ($ConnectionPool) {
+            try {
+                $ctx = Get-AdLdapPooledContext -Pool $ConnectionPool -Domain $Domain
+            } catch {
+                Write-GroupEnumLog -Level 'ERROR' -Operation 'LdapConnect' `
+                    -Message "Could not obtain pooled connection to '$Domain'" `
+                    -Context @{ domain = $Domain; error = $_.ToString() }
+                return @{
+                    RootGroup = @{ Name = $GroupName; DN = $null }
+                    Nodes     = @()
+                    MaxDepth  = $resolvedMaxDepth
+                    Errors    = @("Failed to connect to domain '$Domain': $($_.ToString())")
+                }
             }
+            Write-GroupEnumLog -Level 'INFO' -Operation 'LdapConnect' `
+                -Message "Using pooled connection to '$Domain' via $($ctx.Tier)" `
+                -Context @{ domain = $Domain; tier = $ctx.Tier; port = $ctx.Port; baseDN = $ctx.BaseDN; pooled = $true }
+            if ($ctx.Tier -ne 'LDAPS-Verified') {
+                $errors += "WARNING: Using tier '$($ctx.Tier)' (port $($ctx.Port)) for domain '$Domain'. Verified LDAPS was not available."
+            }
+        } else {
+            $connOpen = script:Open-NestedResolverLdap -Domain $Domain -Credential $Credential -Config $Config
+            if (-not $connOpen.Ctx) {
+                return @{
+                    RootGroup = @{ Name = $GroupName; DN = $null }
+                    Nodes     = @()
+                    MaxDepth  = $resolvedMaxDepth
+                    Errors    = @($connOpen.Error)
+                }
+            }
+            if ($connOpen.Error) { $errors += $connOpen.Error }
+            $ctx = $connOpen.Ctx
+            $ownCtx = $true
         }
-        if ($connOpen.Error) { $errors += $connOpen.Error }
-        $ctx = $connOpen.Ctx
 
         try {
             $rootHits = Invoke-AdLdapSearch -Context $ctx `
@@ -703,7 +758,7 @@ function Get-NestedGroupTree {
         }
 
     } finally {
-        if ($ctx) { Close-AdLdapConnection $ctx }
+        if ($ctx -and $ownCtx) { Close-AdLdapConnection $ctx }
     }
 
     Write-GroupEnumLog -Level 'INFO' -Operation 'GroupTree' `
