@@ -8,10 +8,16 @@
     Returns standardized @{ Data = ...; Errors = @() } hashtables throughout.
 
 .NOTES
-    Requires DirectoryServices (.NET). Compatible with PowerShell 5.1 and 7+.
-    Always uses LDAPS (port 636, SecureSocketsLayer). Never uses plaintext LDAP 389.
-    Always disposes DirectoryEntry and DirectorySearcher objects in finally blocks.
+    Requires the ADLdap.ps1 module (dot-sourced from the same directory).
+    ADLdap wraps System.DirectoryServices.Protocols.LdapConnection so this tool
+    works against DCs that enforce LDAP Channel Binding / Signing.
+
+    Connection strategy is delegated to New-AdLdapConnection: LDAPS-Verified
+    first, then optional fallbacks (LDAPS cert-bypass, LDAP 389 sign+seal)
+    controlled by Config.AllowInsecure.
+
     Uses objectCategory (indexed) for all LDAP group/user filters.
+    Compatible with PowerShell 5.1 and 7+.
 #>
 
 function New-GroupEnumConfig {
@@ -187,119 +193,22 @@ function Import-GroupList {
     return , $results
 }
 
-function New-LdapDirectoryEntry {
-    <#
-    .SYNOPSIS
-        Creates a DirectoryEntry for LDAP or LDAPS connections with proper auth flags
-
-    .DESCRIPTION
-        Connection strategy (in order of security):
-          1. LDAPS (port 636) - Full TLS encryption. Requires DC cert trusted by client.
-          2. LDAP + Kerberos Sealing (port 389) - Kerberos-encrypted session data.
-             Nearly equivalent to LDAPS when both sides are domain-joined.
-          3. LDAP plain (port 389) - Authentication only, data in clear. Last resort.
-
-    .PARAMETER Domain
-        NetBIOS name or FQDN of the target domain
-
-    .PARAMETER Port
-        LDAP port: 636 (LDAPS) or 389 (LDAP)
-
-    .PARAMETER Secure
-        $true for LDAPS (SecureSocketsLayer), $false for LDAP.
-        When $false and no explicit credential, Sealing is added for Kerberos encryption.
-
-    .PARAMETER Credential
-        Optional PSCredential. When omitted, current Windows identity (Kerberos) is used.
-
-    .PARAMETER BaseDN
-        Optional base DN to append to the path (e.g. a specific member DN)
-    #>
-    [CmdletBinding()]
-    [OutputType([System.DirectoryServices.DirectoryEntry])]
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Domain,
-
-        [Parameter(Mandatory = $true)]
-        [int]$Port,
-
-        [Parameter(Mandatory = $true)]
-        [bool]$Secure,
-
-        [Parameter(Mandatory = $false)]
-        [PSCredential]$Credential,
-
-        [Parameter(Mandatory = $false)]
-        [string]$BaseDN
-    )
-
-    $path = if ($BaseDN) {
-        "LDAP://$Domain`:$Port/$BaseDN"
-    } else {
-        "LDAP://$Domain`:$Port"
-    }
-
-    if ($Secure) {
-        $authType = [System.DirectoryServices.AuthenticationTypes]::SecureSocketsLayer
-    } else {
-        # LDAP 389: use Sealing for Kerberos-encrypted session when using integrated auth
-        # Sealing wraps the entire LDAP session in Kerberos encryption (SASL/GSSAPI)
-        if ($Credential) {
-            $authType = [System.DirectoryServices.AuthenticationTypes]::Secure
-        } else {
-            $authType = [System.DirectoryServices.AuthenticationTypes]::Secure -bor
-                        [System.DirectoryServices.AuthenticationTypes]::Sealing
-        }
-    }
-
-    if ($Credential) {
-        return New-Object System.DirectoryServices.DirectoryEntry(
-            $path,
-            $Credential.UserName,
-            $Credential.GetNetworkCredential().Password,
-            $authType
-        )
-    } else {
-        return New-Object System.DirectoryServices.DirectoryEntry(
-            $path,
-            $null,
-            $null,
-            $authType
-        )
-    }
-}
 
 function Get-GroupMembersDirect {
     <#
     .SYNOPSIS
-        Low-level helper: enumerates group members via DirectoryEntry + DirectorySearcher
+        Low-level helper: enumerates group members via LdapConnection
 
     .DESCRIPTION
-        Builds an LDAPS connection to the target domain, finds the group by CN,
-        reads its member DNs, then queries each member for user properties.
-        Returns raw member hashtables suitable for the Get-GroupMembers caller.
+        Uses the shared ADLdap helpers (New-AdLdapConnection / Invoke-AdLdapSearch)
+        which are built on System.DirectoryServices.Protocols.LdapConnection and
+        work against hardened DCs that enforce LDAP Channel Binding / Signing.
 
-        Uses LDAPS port 636 with SecureSocketsLayer authentication exclusively.
-        Uses objectCategory (indexed) in all LDAP filters.
-        Disposes all DirectoryEntry and DirectorySearcher objects in finally blocks.
-
-    .PARAMETER Domain
-        NetBIOS domain name or FQDN used to build the LDAP path
-
-    .PARAMETER GroupName
-        CN (common name) of the group to enumerate
-
-    .PARAMETER Credential
-        Optional credentials. When omitted, current Windows identity is used.
-
-    .PARAMETER Config
-        Configuration hashtable (uses LdapPageSize, LdapTimeout, MaxMemberCount,
-        SkipLargeGroups, LargeGroupThreshold, SkipGroups)
+        Connection tiers (in order): LDAPS-Verified, LDAPS-Unverified (with
+        -AllowInsecure), LDAP 389 sign+seal (with -AllowInsecure).
 
     .OUTPUTS
-        Hashtable: @{ Members = @(...); DistinguishedName = "CN=..."; MemberCount = N;
-                      Skipped = $false; SkipReason = $null; Errors = @() }
+        Hashtable: @{ Members; DistinguishedName; MemberCount; Skipped; SkipReason; Errors }
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -321,246 +230,129 @@ function Get-GroupMembersDirect {
     $members     = @()
     $groupDN     = $null
     $memberCount = 0
-    $skipped     = $false
-    $skipReason  = $null
 
     # Config values with defaults
-    $pageSize           = if ($Config.LdapPageSize)        { $Config.LdapPageSize }        else { 1000 }
-    $timeoutSeconds     = if ($Config.LdapTimeout)         { $Config.LdapTimeout }         else { 120 }
-    $maxMemberCount     = if ($Config.MaxMemberCount)      { $Config.MaxMemberCount }      else { 5000 }
-    $skipLargeGroups    = if ($null -ne $Config.SkipLargeGroups) { $Config.SkipLargeGroups } else { $true }
-    $largeGroupThresh   = if ($Config.LargeGroupThreshold) { $Config.LargeGroupThreshold } else { 5000 }
-    $skipGroupNames     = if ($Config.SkipGroups)          { $Config.SkipGroups }          else { @() }
-    $allowInsecure      = if ($null -ne $Config.AllowInsecure)  { $Config.AllowInsecure }  else { $false }
+    $pageSize         = if ($Config.LdapPageSize)              { $Config.LdapPageSize }        else { 1000 }
+    $timeoutSeconds   = if ($Config.LdapTimeout)               { $Config.LdapTimeout }         else { 120 }
+    $maxMemberCount   = if ($Config.MaxMemberCount)            { $Config.MaxMemberCount }      else { 5000 }
+    $skipLargeGroups  = if ($null -ne $Config.SkipLargeGroups) { $Config.SkipLargeGroups }     else { $true }
+    $largeGroupThresh = if ($Config.LargeGroupThreshold)       { $Config.LargeGroupThreshold } else { 5000 }
+    $skipGroupNames   = if ($Config.SkipGroups)                { $Config.SkipGroups }          else { @() }
+    $allowInsecure    = if ($null -ne $Config.AllowInsecure)   { $Config.AllowInsecure }       else { $false }
 
-    # Check well-known skip list (case-insensitive)
+    # Well-known skip list
     if ($skipGroupNames -contains $GroupName) {
-        return @{
-            Members          = @()
-            DistinguishedName = $null
-            MemberCount      = 0
-            Skipped          = $true
-            SkipReason       = "Group '$GroupName' is in the SkipGroups list"
-            Errors           = @()
-        }
-    }
-
-    $groupEntry   = $null
-    $groupSearcher = $null
-    $groupResults  = $null
-
-    # Determine connection parameters: try LDAPS 636 first, fall back to 389 if AllowInsecure
-    $usedInsecure = $false
-    $connectionError636 = $null
-
-    Write-GroupEnumLog -Level 'DEBUG' -Operation 'LdapConnect' `
-        -Message "Attempting LDAPS (636) to domain '$Domain'" -Context @{
-            domain = $Domain; port = 636; groupName = $GroupName
-        }
-
-    try {
-        $groupEntry = New-LdapDirectoryEntry -Domain $Domain -Port 636 -Secure $true `
-            -Credential $Credential
-        # Validate the connection by accessing a property
-        $null = $groupEntry.distinguishedName
-
-        Write-GroupEnumLog -Level 'DEBUG' -Operation 'LdapConnect' `
-            -Message "LDAPS (636) connected to '$Domain'" -Context @{
-                domain = $Domain; port = 636; tier = 'LDAPS'
-            }
-    } catch {
-        $connectionError636 = $_
-        if ($groupEntry) { $groupEntry.Dispose(); $groupEntry = $null }
-
-        Write-GroupEnumLog -Level 'WARN' -Operation 'LdapConnect' `
-            -Message "LDAPS (636) failed for '$Domain': $connectionError636" -Context @{
-                domain = $Domain; port = 636; error = $connectionError636.ToString()
-            }
-
-        if ($allowInsecure) {
-            Write-Warning "LDAPS (636) failed for domain '$Domain': $connectionError636"
-            Write-Warning "Falling back to LDAP (389) with Kerberos Sealing."
-
-            Write-GroupEnumLog -Level 'INFO' -Operation 'LdapConnect' `
-                -Message "Falling back to LDAP (389) with Kerberos Sealing for '$Domain'" -Context @{
-                    domain = $Domain; port = 389; tier = 'Kerberos-Sealing'
-                }
-
-            try {
-                $groupEntry = New-LdapDirectoryEntry -Domain $Domain -Port 389 -Secure $false `
-                    -Credential $Credential
-                $null = $groupEntry.distinguishedName
-                $usedInsecure = $true
-                $errors += "WARNING: Using LDAP (389) with Kerberos Sealing for domain '$Domain'. LDAPS (636) failed: $connectionError636"
-
-                Write-GroupEnumLog -Level 'WARN' -Operation 'LdapConnect' `
-                    -Message "Connected via LDAP (389) to '$Domain'" -Context @{
-                        domain = $Domain; port = 389; tier = 'Kerberos-Sealing'
-                        ldapsError = $connectionError636.ToString()
-                    }
-            } catch {
-                if ($groupEntry) { $groupEntry.Dispose(); $groupEntry = $null }
-
-                Write-GroupEnumLog -Level 'ERROR' -Operation 'LdapConnect' `
-                    -Message "Both LDAPS (636) and LDAP (389) failed for '$Domain'" -Context @{
-                        domain     = $Domain
-                        ldapsError = $connectionError636.ToString()
-                        ldapError  = $_.ToString()
-                    }
-
-                throw "Both LDAPS (636) and LDAP (389) failed for domain '$Domain'. LDAPS error: $connectionError636 -- LDAP error: $_"
-            }
-        } else {
-            Write-GroupEnumLog -Level 'ERROR' -Operation 'LdapConnect' `
-                -Message "LDAPS (636) failed and AllowInsecure is disabled for '$Domain'" -Context @{
-                    domain = $Domain; error = $connectionError636.ToString()
-                }
-
-            throw "LDAPS (636) failed for domain '$Domain': $connectionError636. Use -AllowInsecure to fall back to LDAP (389)."
-        }
-    }
-
-    # Track the port used for member queries later
-    $ldapPort   = if ($usedInsecure) { 389 } else { 636 }
-    $ldapSecure = -not $usedInsecure
-
-    try {
-
-        # Step 1: Find the group by CN using objectCategory (indexed)
-        $groupSearcher = New-Object System.DirectoryServices.DirectorySearcher($groupEntry)
-        $groupSearcher.Filter      = "(&(objectCategory=group)(cn=$GroupName))"
-        $groupSearcher.SearchScope = [System.DirectoryServices.SearchScope]::Subtree
-        $groupSearcher.PageSize    = $pageSize
-        $groupSearcher.ServerTimeLimit = New-TimeSpan -Seconds $timeoutSeconds
-        $groupSearcher.ClientTimeout   = New-TimeSpan -Seconds ($timeoutSeconds + 10)
-
-        $null = $groupSearcher.PropertiesToLoad.Add('distinguishedName')
-        $null = $groupSearcher.PropertiesToLoad.Add('cn')
-        $null = $groupSearcher.PropertiesToLoad.Add('member')
-        $null = $groupSearcher.PropertiesToLoad.Add('memberOf')
-
-        try {
-            $groupResults = $groupSearcher.FindAll()
-
-            if (-not $groupResults -or $groupResults.Count -eq 0) {
-                return @{
-                    Members           = @()
-                    DistinguishedName = $null
-                    MemberCount       = 0
-                    Skipped           = $true
-                    SkipReason        = "Group '$GroupName' not found in domain '$Domain'"
-                    Errors            = @("Group not found")
-                }
-            }
-
-            # Use the first match
-            $groupResult = $groupResults[0]
-            $groupDN = if ($groupResult.Properties['distinguishedName'].Count -gt 0) {
-                $groupResult.Properties['distinguishedName'][0]
-            } else { $null }
-
-            # Get raw member DNs from the member attribute
-            $rawMemberDNs = @()
-            if ($groupResult.Properties['member'].Count -gt 0) {
-                foreach ($m in $groupResult.Properties['member']) {
-                    $rawMemberDNs += $m
-                }
-            }
-
-            $memberCount = $rawMemberDNs.Count
-
-        } finally {
-            if ($groupResults) { $groupResults.Dispose() }
-        }
-
-    } catch {
-        $errors += "Failed to find group '$GroupName' in domain '$Domain': $_"
         return @{
             Members           = @()
             DistinguishedName = $null
             MemberCount       = 0
-            Skipped           = $false
-            SkipReason        = $null
-            Errors            = $errors
-        }
-    } finally {
-        if ($groupSearcher) { $groupSearcher.Dispose() }
-        if ($groupEntry)    { $groupEntry.Dispose() }
-    }
-
-    # Step 2: Check large-group threshold before enumerating members
-    if ($skipLargeGroups -and $memberCount -ge $largeGroupThresh) {
-        return @{
-            Members           = @()
-            DistinguishedName = $groupDN
-            MemberCount       = $memberCount
             Skipped           = $true
-            SkipReason        = "Group '$GroupName' has $memberCount members (threshold: $largeGroupThresh)"
+            SkipReason        = "Group '$GroupName' is in the SkipGroups list"
             Errors            = @()
         }
     }
 
-    # Cap member retrieval at MaxMemberCount
-    $memberDNsToQuery = if ($rawMemberDNs.Count -gt $maxMemberCount) {
-        $errors += "Warning: Member count ($($rawMemberDNs.Count)) exceeds MaxMemberCount ($maxMemberCount). Results truncated."
-        $rawMemberDNs[0..($maxMemberCount - 1)]
-    } else {
-        $rawMemberDNs
-    }
+    $ctx = $null
+    try {
+        Write-GroupEnumLog -Level 'DEBUG' -Operation 'LdapConnect' `
+            -Message "Opening LDAP connection to '$Domain'" `
+            -Context @{ domain = $Domain; groupName = $GroupName; allowInsecure = $allowInsecure }
 
-    # Step 3: For each member DN, query for user properties
-    foreach ($memberDN in $memberDNsToQuery) {
-        $memberEntry    = $null
-        $memberSearcher = $null
-        $memberResults  = $null
+        $connParams = @{
+            Server         = $Domain
+            TimeoutSeconds = $timeoutSeconds
+        }
+        if ($Credential)    { $connParams.Credential    = $Credential }
+        if ($allowInsecure) { $connParams.AllowInsecure = $true }
 
         try {
-            # Use same port/security as the group query (636 or 389 fallback)
-            $memberEntry = New-LdapDirectoryEntry -Domain $Domain -Port $ldapPort `
-                -Secure $ldapSecure -Credential $Credential -BaseDN $memberDN
+            $ctx = New-AdLdapConnection @connParams
+        } catch {
+            Write-GroupEnumLog -Level 'ERROR' -Operation 'LdapConnect' `
+                -Message "Could not connect to '$Domain'" `
+                -Context @{ domain = $Domain; error = $_.ToString() }
+            throw
+        }
 
-            $memberSearcher = New-Object System.DirectoryServices.DirectorySearcher($memberEntry)
-            $memberSearcher.Filter      = "(objectCategory=person)"
-            $memberSearcher.SearchScope = [System.DirectoryServices.SearchScope]::Base
-            $memberSearcher.PageSize    = 1
-            $memberSearcher.ServerTimeLimit = New-TimeSpan -Seconds $timeoutSeconds
-            $memberSearcher.ClientTimeout   = New-TimeSpan -Seconds ($timeoutSeconds + 10)
+        Write-GroupEnumLog -Level 'INFO' -Operation 'LdapConnect' `
+            -Message "Connected to '$Domain' via $($ctx.Tier)" `
+            -Context @{ domain = $Domain; tier = $ctx.Tier; port = $ctx.Port; baseDN = $ctx.BaseDN }
 
-            $null = $memberSearcher.PropertiesToLoad.Add('sAMAccountName')
-            $null = $memberSearcher.PropertiesToLoad.Add('displayName')
-            $null = $memberSearcher.PropertiesToLoad.Add('mail')
-            $null = $memberSearcher.PropertiesToLoad.Add('userAccountControl')
-            $null = $memberSearcher.PropertiesToLoad.Add('distinguishedName')
+        if ($ctx.Tier -ne 'LDAPS-Verified') {
+            $errors += "WARNING: Using tier '$($ctx.Tier)' (port $($ctx.Port)) for domain '$Domain'. Verified LDAPS was not available."
+        }
 
+        # Step 1: Find the group
+        $groupHits = Invoke-AdLdapSearch -Context $ctx `
+            -Filter "(&(objectCategory=group)(cn=$GroupName))" `
+            -Attributes @('distinguishedName','cn','member') `
+            -PageSize $pageSize -TimeoutSeconds $timeoutSeconds
+
+        if ($groupHits.Count -eq 0) {
+            return @{
+                Members           = @()
+                DistinguishedName = $null
+                MemberCount       = 0
+                Skipped           = $true
+                SkipReason        = "Group '$GroupName' not found in domain '$Domain'"
+                Errors            = $errors + @("Group not found")
+            }
+        }
+
+        $g = $groupHits[0]
+        $groupDN = $g.DistinguishedName
+
+        $rawMemberDNs = @()
+        if ($g.ContainsKey('member')) {
+            if ($g.member -is [array]) { $rawMemberDNs = @($g.member) }
+            else                       { $rawMemberDNs = @([string]$g.member) }
+        }
+        $memberCount = $rawMemberDNs.Count
+
+        # Step 2: Check large-group threshold
+        if ($skipLargeGroups -and $memberCount -ge $largeGroupThresh) {
+            return @{
+                Members           = @()
+                DistinguishedName = $groupDN
+                MemberCount       = $memberCount
+                Skipped           = $true
+                SkipReason        = "Group '$GroupName' has $memberCount members (threshold: $largeGroupThresh)"
+                Errors            = $errors
+            }
+        }
+
+        # Cap member retrieval at MaxMemberCount
+        $memberDNsToQuery = if ($rawMemberDNs.Count -gt $maxMemberCount) {
+            $errors += "Warning: Member count ($($rawMemberDNs.Count)) exceeds MaxMemberCount ($maxMemberCount). Results truncated."
+            $rawMemberDNs[0..($maxMemberCount - 1)]
+        } else {
+            $rawMemberDNs
+        }
+
+        # Step 3: Resolve each member DN
+        foreach ($memberDN in $memberDNsToQuery) {
             try {
-                $memberResults = $memberSearcher.FindAll()
+                $hit = Invoke-AdLdapSearch -Context $ctx -BaseDN $memberDN `
+                    -Filter '(objectCategory=person)' -Scope Base `
+                    -Attributes @('sAMAccountName','displayName','mail','userAccountControl','distinguishedName') `
+                    -TimeoutSeconds $timeoutSeconds
 
-                if ($memberResults -and $memberResults.Count -gt 0) {
-                    $mr = $memberResults[0]
-
-                    $sam     = if ($mr.Properties['sAMAccountName'].Count -gt 0)    { $mr.Properties['sAMAccountName'][0] }    else { $null }
-                    $display = if ($mr.Properties['displayName'].Count -gt 0)       { $mr.Properties['displayName'][0] }       else { $null }
-                    $mail    = if ($mr.Properties['mail'].Count -gt 0)              { $mr.Properties['mail'][0] }              else { $null }
-                    $dn      = if ($mr.Properties['distinguishedName'].Count -gt 0) { $mr.Properties['distinguishedName'][0] } else { $memberDN }
-
-                    $uac     = if ($mr.Properties['userAccountControl'].Count -gt 0) {
-                        [int]$mr.Properties['userAccountControl'][0]
-                    } else { 0 }
-
-                    # Bit 2 (0x0002) of userAccountControl = ACCOUNTDISABLE
-                    $enabled = ($uac -band 2) -eq 0
+                if ($hit.Count -gt 0) {
+                    $m = $hit[0]
+                    $uac = if ($m.ContainsKey('userAccountControl')) { [int]$m.userAccountControl } else { 0 }
+                    # Bit 2 (0x0002) of UAC = ACCOUNTDISABLE
+                    $enabled = (($uac -band 2) -eq 0)
 
                     $members += @{
-                        SamAccountName    = $sam
-                        DisplayName       = $display
-                        Email             = $mail
+                        SamAccountName    = if ($m.ContainsKey('sAMAccountName')) { $m.sAMAccountName } else { $null }
+                        DisplayName       = if ($m.ContainsKey('displayName'))    { $m.displayName }    else { $null }
+                        Email             = if ($m.ContainsKey('mail'))           { $m.mail }           else { $null }
                         Enabled           = $enabled
                         Domain            = $Domain
-                        DistinguishedName = $dn
+                        DistinguishedName = $m.DistinguishedName
                     }
                 } else {
-                    # Member DN exists but objectCategory=person returned nothing.
-                    # Could be a nested group, contact, or computer. Include as partial entry.
+                    # Nested group, contact, computer, or similar. Include partial entry.
                     $members += @{
                         SamAccountName    = $null
                         DisplayName       = $null
@@ -570,25 +362,22 @@ function Get-GroupMembersDirect {
                         DistinguishedName = $memberDN
                     }
                 }
-            } finally {
-                if ($memberResults) { $memberResults.Dispose() }
+            } catch {
+                $errors += "Failed to query member '$memberDN': $($_.Exception.Message.Trim())"
             }
-
-        } catch {
-            $errors += "Failed to query member '$memberDN': $_"
-        } finally {
-            if ($memberSearcher) { $memberSearcher.Dispose() }
-            if ($memberEntry)    { $memberEntry.Dispose() }
         }
-    }
 
-    return @{
-        Members           = $members
-        DistinguishedName = $groupDN
-        MemberCount       = $memberCount
-        Skipped           = $skipped
-        SkipReason        = $skipReason
-        Errors            = $errors
+        return @{
+            Members           = $members
+            DistinguishedName = $groupDN
+            MemberCount       = $memberCount
+            Skipped           = $false
+            SkipReason        = $null
+            Errors            = $errors
+        }
+
+    } finally {
+        if ($ctx) { Close-AdLdapConnection $ctx }
     }
 }
 

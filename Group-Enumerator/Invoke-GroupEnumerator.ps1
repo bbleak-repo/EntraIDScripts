@@ -169,6 +169,7 @@ if (-not $ConfigPath) {
 Write-Host 'Loading modules...' -ForegroundColor Cyan
 
 $moduleFiles = @(
+    'ADLdap.ps1',
     'GroupEnumLogger.ps1',
     'GroupEnumerator.ps1',
     'FuzzyMatcher.ps1',

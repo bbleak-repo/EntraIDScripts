@@ -1,5 +1,8 @@
 Output/
 Tests/Output/
+Cache/
+Logs/
 *.log
+*.jsonl
 .DS_Store
 Thumbs.db
