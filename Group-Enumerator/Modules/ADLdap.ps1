@@ -268,8 +268,12 @@ function Invoke-AdLdapSearch {
         throw "Invoke-AdLdapSearch: Context is null or missing a Connection"
     }
 
-    $conn    = $Context.Connection
-    $effBase = if ($BaseDN) { $BaseDN } else { $Context.BaseDN }
+    $conn = $Context.Connection
+    # Distinguish "caller omitted -BaseDN" (use the context default) from
+    # "caller passed -BaseDN '' explicitly" (address the RootDSE). PowerShell
+    # treats an empty string as falsy, so $BaseDN truthiness can't tell them
+    # apart -- use PSBoundParameters instead.
+    $effBase = if ($PSBoundParameters.ContainsKey('BaseDN')) { $BaseDN } else { $Context.BaseDN }
 
     $scopeEnum = switch ($Scope) {
         'Base'     { [System.DirectoryServices.Protocols.SearchScope]::Base }
@@ -297,9 +301,9 @@ function Invoke-AdLdapSearch {
         $resp = $conn.SendRequest($req)
 
         foreach ($entry in $resp.Entries) {
-            # Entries with a null DN are referral responses; skip them.
-            if (-not $entry.DistinguishedName) { continue }
-
+            # Note: SearchResultEntry.DistinguishedName may be an empty string
+            # (legitimately, for RootDSE). Referrals land in $resp.References,
+            # not $resp.Entries, so we do NOT skip on empty DN here.
             $h = @{ DistinguishedName = [string]$entry.DistinguishedName }
             # Case-insensitive set for binary attr lookup
             $binarySet = @{}
