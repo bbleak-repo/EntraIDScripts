@@ -301,17 +301,24 @@ function Find-MatchingGroups {
         # A match requires items from at least two distinct domains
         $distinctDomains = @($group | ForEach-Object { $_.Domain } | Sort-Object -Unique)
         if ($distinctDomains.Count -ge 2) {
+            $groupArr = @($group | ForEach-Object {
+                @{
+                    Domain      = $_.Domain
+                    GroupName   = $_.GroupName
+                    MemberCount = $_.MemberCount
+                    Data        = $_.Data
+                }
+            })
             $matched += @{
                 NormalizedName = $key
                 Score          = 1.0
-                Groups         = $group | ForEach-Object {
-                    @{
-                        Domain      = $_.Domain
-                        GroupName   = $_.GroupName
-                        MemberCount = $_.MemberCount
-                        Data        = $_.Data
-                    }
-                }
+                Groups         = $groupArr
+                # Directional convenience fields used by correlation/gap analysis.
+                # First distinct-domain entry is treated as source, second as target.
+                SourceDomain   = $groupArr[0].Domain
+                SourceGroup    = $groupArr[0].GroupName
+                TargetDomain   = $groupArr[1].Domain
+                TargetGroup    = $groupArr[1].GroupName
             }
         } else {
             # Single domain or empty -- candidate for fuzzy pass
@@ -396,6 +403,10 @@ function Find-MatchingGroups {
                     Data        = $pair.ItemB.Data
                 }
             )
+            SourceDomain = $pair.ItemA.Domain
+            SourceGroup  = $pair.ItemA.GroupName
+            TargetDomain = $pair.ItemB.Domain
+            TargetGroup  = $pair.ItemB.GroupName
         }
     }
 
