@@ -106,7 +106,7 @@ Levels: `DEBUG`, `INFO`, `WARN`, `ERROR`. Context fields are merged flat into th
 
 ### PowerShell Gotchas
 - `$(if (...))` for subexpressions (not `(if (...))`). Bare `if` inside hashtable literals or function call parens causes parse errors.
-- Use unary comma `return , $collection` to prevent pipeline unrolling of single-element arrays and HashSets.
+- Use unary comma `return , $collection` to prevent pipeline unrolling of single-element arrays and HashSets. Also wrap `Sort-Object` results in `@()` when the input may be a single element: `$arr = @($arr | Sort-Object ...)`. Without this, a single-element array becomes a bare hashtable after sorting, and `.Count` returns the number of *keys* instead of the number of *items*.
 - `[array]$var` cast to preserve array type across assignment.
 - `-contains` is case-insensitive for strings. Use HashSet for case-insensitive `.Contains()`.
 - `Add-Content -Encoding UTF8` for log appends. `[System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))` for reports (no BOM).
@@ -139,6 +139,23 @@ pwsh -File Tests/Test-MigrationReadiness.ps1
 ```
 
 All tests use mock data. No LDAP/AD dependency. Runs on Windows, macOS, Linux.
+
+### Test Fixtures
+
+`Tests/fixtures/` contains helpers for live testing:
+
+| File | Purpose |
+|------|---------|
+| `test-groups.csv` | Example CSV for smoke runs against a real domain |
+| `test-groups-ip.csv` | Example CSV targeting a DC by IP (tests cert-bypass fallback) |
+| `Build-SyntheticTwoForest.ps1` | Derives a synthetic two-forest JSON cache from a real one-forest cache. Mutates domain names, group prefixes, drops/adds members to exercise fuzzy match, correlation, gap analysis, and migration dashboard without needing a real second forest. |
+
+The parent repo also includes `Tests/fixtures/Seed-TestAD.ps1` and
+`Remove-TestAD.ps1` — these populate a real AD with 24 OUs, 36 users, 25
+groups, computers, and contacts under `OU=_DiscoveryTestData` so both
+AD-Discovery and Group-Enumerator have rich wire data to exercise. Requires
+Domain Admin or delegated write access. Idempotent; teardown is a single
+recursive delete.
 
 ### Adding Tests
 1. Add test in the appropriate category section

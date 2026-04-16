@@ -88,6 +88,27 @@ pwsh ./AD-Discovery.ps1 -UseMock -Server mock-prod.local -CompareServer mock-dev
 # - mock-dev.local:  Windows Server 2019, 2 DCs, 12 OUs, simplified structure
 ```
 
+### Seed Test Data (Populate a Real AD for Testing)
+
+If your AD domain is minimal (fresh install, few objects), use the seed script
+to populate realistic test data. Requires Domain Admin or delegated write access.
+
+```powershell
+# Create OU=_DiscoveryTestData with 24 OUs, 36 users, 25 groups, 6 computers,
+# 3 contacts, and 60+ membership links
+$adminCred = Get-Credential DOMAIN\Admin
+.\Tests\fixtures\Seed-TestAD.ps1 -Server dc01.contoso.com -Credential $adminCred -AllowInsecure
+
+# Now run discovery against the populated domain
+.\AD-Discovery.ps1 -Server dc01.contoso.com -AllowInsecure
+
+# Teardown — single recursive delete of the entire _DiscoveryTestData OU
+.\Tests\fixtures\Remove-TestAD.ps1 -Server dc01.contoso.com -Credential $adminCred -AllowInsecure
+```
+
+Both scripts are idempotent (seed skips existing objects, teardown is a no-op
+if the OU doesn't exist) and use the same `ADLdap.ps1` LdapConnection stack.
+
 ## Detailed Usage
 
 ### Parameters
@@ -346,6 +367,9 @@ EntraIDScripts/
 │   └── report-template.html         # Professional HTML report template
 ├── Tests/
 │   ├── Test-Discovery.ps1           # Comprehensive test suite (107 tests, mock-driven)
+│   ├── fixtures/
+│   │   ├── Seed-TestAD.ps1          # Populates AD with realistic test data (24 OUs, 36 users, 25 groups)
+│   │   └── Remove-TestAD.ps1        # Tears down test data (recursive OU delete)
 │   └── Output/                      # Test output directory
 └── Output/                          # Report output directory
 ```

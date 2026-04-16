@@ -142,8 +142,11 @@ function Get-OUStructure {
             $ous += $ouInfo
         }
 
-        # Sort OUs by distinguished name for hierarchical display
-        $ous = $ous | Sort-Object -Property DistinguishedName
+        # Sort OUs by distinguished name for hierarchical display.
+        # Wrap in @() — pipeline unwraps single-element arrays, turning one
+        # OU (a hashtable with 9 keys) into a bare hashtable where .Count
+        # returns 9 (the number of keys) rather than 1 (the number of OUs).
+        $ous = @($ous | Sort-Object -Property DistinguishedName)
 
         $data = @{
             TotalOUs = $ous.Count
