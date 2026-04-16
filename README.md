@@ -7,9 +7,12 @@ Enterprise-grade Active Directory discovery and comparison toolkit designed for 
 - **Comprehensive Discovery**: Forest/domain info, schema, OU structure, sites/subnets, trusts, domain controllers, groups, and DNS zones
 - **Two-Domain Comparison**: Deep delta analysis with detailed difference reporting (added, removed, changed, unchanged)
 - **Multiple Output Formats**: Professional HTML reports (dark mode), structured JSON, and category-specific CSV exports
-- **No RSAT Required**: Direct LDAP queries using .NET System.DirectoryServices
+- **Modern LDAP Stack**: Built on `System.DirectoryServices.Protocols.LdapConnection` via the shared `ADLdap.ps1` helper. Works against DCs enforcing LDAP Channel Binding and LDAP Signing -- the hardened modern default.
+- **Tiered Connectivity**: LDAPS-Verified (636) by default; with `-AllowInsecure` falls through LDAPS cert-bypass then LDAP 389 Kerberos sign+seal. Tier in use is logged.
+- **Per-Run Connection Pool**: One `LdapConnection` per server, reused across every discovery module in a single invocation.
+- **No RSAT Required**: Direct LDAP queries, no external dependencies
 - **No Admin Rights**: Read-only operations suitable for standard user accounts
-- **Cross-Platform Testing**: Mock data provider for macOS/Linux development and testing
+- **Cross-Platform Testing**: Mock data provider for macOS/Linux development and testing (`-UseMock`)
 - **Modular Architecture**: Easy to extend with new discovery modules
 - **Production Ready**: Comprehensive error handling, resource cleanup, and progress reporting
 
@@ -18,8 +21,9 @@ Enterprise-grade Active Directory discovery and comparison toolkit designed for 
 ### Windows (Production)
 - PowerShell 5.1 or later
 - Windows 11 (tested) or Windows Server 2019+
-- Network access to domain controllers
+- Network access to domain controllers on port 636 (LDAPS); 389 only if fallback tiers are enabled
 - Standard domain user credentials (no admin rights required)
+- Works against DCs with LDAP Channel Binding / Signing enforced
 
 ### macOS/Linux (Testing)
 - PowerShell 7+ (Core)
@@ -28,42 +32,60 @@ Enterprise-grade Active Directory discovery and comparison toolkit designed for 
 
 ## Quick Start
 
+### Show usage summary
+
+```powershell
+# Bare invocation prints usage with grouped switches and examples, then exits
+.\AD-Discovery.ps1
+.\AD-Discovery.ps1 -Help
+
+# Full parameter docs
+Get-Help .\AD-Discovery.ps1 -Detailed
+```
+
 ### Single Domain Discovery (Windows)
 
 ```powershell
-# Discover current domain
+# Simplest — integrated auth, verified LDAPS only
 .\AD-Discovery.ps1 -Server dc01.contoso.com
+
+# With fallback tiers (cross-forest, lab environments, or rotated certs)
+.\AD-Discovery.ps1 -Server dc01.contoso.com -AllowInsecure
 
 # With explicit credentials
 $cred = Get-Credential
-.\AD-Discovery.ps1 -Server dc01.contoso.com -Credential $cred
+.\AD-Discovery.ps1 -Server dc01.contoso.com -Credential $cred -AllowInsecure
 
-# Custom output location
-.\AD-Discovery.ps1 -Server dc01.contoso.com -OutputPath "C:\Reports"
+# Skip slow / unwanted modules
+.\AD-Discovery.ps1 -Server dc01.contoso.com -SkipModules Schema,DNS
+
+# Custom output location and format selection
+.\AD-Discovery.ps1 -Server dc01.contoso.com -Format HTML,JSON -OutputPath "C:\Reports"
 ```
 
 ### Two-Domain Comparison (Windows)
 
 ```powershell
 # Compare production and development domains
-.\AD-Discovery.ps1 -Server dc01-prod.contoso.com -CompareServer dc01-dev.contoso.com
+.\AD-Discovery.ps1 -Server dc01-prod.contoso.com -CompareServer dc01-dev.contoso.com -AllowInsecure
 
 # With separate credentials for each domain
 $prodCred = Get-Credential -Message "Production Domain"
-$devCred = Get-Credential -Message "Development Domain"
+$devCred  = Get-Credential -Message "Development Domain"
 .\AD-Discovery.ps1 -Server dc01-prod.contoso.com -Credential $prodCred `
-                   -CompareServer dc01-dev.contoso.com -CompareCredential $devCred
+                   -CompareServer dc01-dev.contoso.com -CompareCredential $devCred `
+                   -AllowInsecure
 ```
 
 ### Mock Mode Testing (macOS/Linux)
 
 ```powershell
-# Test with mock data on macOS
+# Test with mock data on macOS — no AD required
 pwsh ./AD-Discovery.ps1 -UseMock -Server mock-prod.local -CompareServer mock-dev.local
 
 # Mock domains available:
 # - mock-prod.local: Windows Server 2022, 3 DCs, 15 OUs, complex structure
-# - mock-dev.local: Windows Server 2019, 2 DCs, 12 OUs, simplified structure
+# - mock-dev.local:  Windows Server 2019, 2 DCs, 12 OUs, simplified structure
 ```
 
 ## Detailed Usage
@@ -75,13 +97,15 @@ pwsh ./AD-Discovery.ps1 -UseMock -Server mock-prod.local -CompareServer mock-dev
 | `-Server` | String | Yes* | Primary domain controller FQDN or domain name |
 | `-CompareServer` | String | No | Second domain for comparison |
 | `-UseMock` | Switch | No | Use mock data provider (required on non-Windows) |
-| `-Format` | String[] | No | Output formats: HTML, JSON (default: both) |
+| `-AllowInsecure` | Switch | No | Enable fallback tiers when verified LDAPS fails (cert bypass, then 389 sign+seal) |
+| `-Format` | String[] | No | Output formats: HTML, JSON, CSV (default from config) |
 | `-SkipModules` | String[] | No | Modules to skip (e.g., DNS, Groups) |
-| `-Credential` | PSCredential | No | Credentials for primary domain |
+| `-Credential` | PSCredential | No | Credentials for primary domain (default: current user via Kerberos) |
 | `-CompareCredential` | PSCredential | No | Credentials for comparison domain |
 | `-OutputPath` | String | No | Output directory (default: ./Output) |
+| `-Help` | Switch | No | Show usage summary with examples and exit |
 
-*Not required if `-UseMock` is specified
+*Not required if `-UseMock` is specified. Running without `-Server` and without `-UseMock` prints the usage summary and exits with code 2.
 
 ### Discovery Modules
 
@@ -244,7 +268,7 @@ Collections are matched using appropriate key fields:
 
 ## Testing
 
-Comprehensive test suite with 50+ tests covering all modules and comparison scenarios.
+Comprehensive test suite with **107 tests** covering all modules and comparison scenarios. Tests use the mock provider and run on any platform (Windows, macOS, Linux).
 
 ### Run Tests
 
@@ -299,31 +323,37 @@ All tests passed!
 ## Project Structure
 
 ```
-EntraID/
-├── AD-Discovery.ps1                 # Main entry point
+EntraIDScripts/
+├── AD-Discovery.ps1                 # Main entry point (pool owner, -Help, flow control)
 ├── README.md                        # This file
 ├── Config/
 │   └── discovery-config.json        # Configuration settings
 ├── Modules/
-│   ├── Helpers.ps1                  # Shared utilities (LDAP, platform detection)
+│   ├── ADLdap.ps1                   # Shared LDAP helper (LdapConnection, pool, tiers) [CANONICAL in Group-Enumerator]
+│   ├── Helpers.ps1                  # Shim layer over ADLdap + platform detection + utilities
 │   ├── MockProvider.ps1             # Mock data for testing
 │   ├── ForestDomain.ps1             # Forest/domain discovery
 │   ├── Schema.ps1                   # Schema discovery
 │   ├── OUStructure.ps1              # OU hierarchy discovery
-│   ├── SitesSubnets.ps1             # Sites/subnets discovery (pending)
-│   ├── Trusts.ps1                   # Trust discovery (pending)
-│   ├── DomainControllers.ps1        # DC discovery (pending)
-│   ├── Groups.ps1                   # Group discovery (pending)
-│   ├── DNS.ps1                      # DNS discovery (pending)
+│   ├── SitesSubnets.ps1             # Sites/subnets discovery
+│   ├── Trusts.ps1                   # Trust discovery
+│   ├── DomainControllers.ps1        # DC discovery
+│   ├── Groups.ps1                   # Group discovery
+│   ├── DNS.ps1                      # DNS discovery
 │   ├── ComparisonEngine.ps1         # Domain comparison logic
 │   └── ReportGenerator.ps1          # HTML/JSON/CSV report generation
 ├── Templates/
 │   └── report-template.html         # Professional HTML report template
 ├── Tests/
-│   ├── Test-Discovery.ps1           # Comprehensive test suite
+│   ├── Test-Discovery.ps1           # Comprehensive test suite (107 tests, mock-driven)
 │   └── Output/                      # Test output directory
 └── Output/                          # Report output directory
 ```
+
+`ADLdap.ps1` is vendored from the Group-Enumerator toolkit -- the canonical
+copy lives at `Group-Enumerator/Modules/ADLdap.ps1` and its file header marks
+it as such. The two copies should be kept byte-identical; diff-sync after
+any fix.
 
 ## Troubleshooting
 
@@ -338,6 +368,30 @@ EntraID/
 - Ensure user account is not locked or expired
 - Check network connectivity to domain controller
 - Verify domain controller FQDN resolves correctly
+
+#### "The LDAP server is unavailable" on Tier 1
+
+**Problem**: TCP 636 is reachable and DNS resolves, but `New-AdLdapConnection`
+fails at the bind step with "LDAP server is unavailable" on Tier 1
+(LDAPS-Verified).
+
+**Cause**: Almost always a TLS certificate trust failure -- the workstation
+cannot validate the DC's current certificate. Common after cert rotation,
+lab environments, cross-forest workstations without the remote CA trusted.
+
+**Solutions**:
+- Use `-AllowInsecure` to enable fallback tiers:
+  ```powershell
+  .\AD-Discovery.ps1 -Server dc01.contoso.com -AllowInsecure
+  ```
+  Tier 2 (LDAPS with cert bypass) will be tried next; the channel is still
+  TLS-encrypted, you're just trusting the server identity on faith. Tier 3
+  (LDAP 389 with Kerberos sign+seal) follows if Tier 2 also fails.
+- Check the `LdapConnect` structured log events to see which tier actually
+  connected. When any fallback tier is used, a warning is surfaced in the
+  generated report.
+- To restore Tier 1, import the DC's CA certificate into the workstation's
+  Trusted Root Certification Authorities store.
 
 #### Timeout Errors
 
@@ -473,6 +527,23 @@ For issues, questions, or contributions, contact:
 - External: [Your contact method]
 
 ## Version History
+
+- **1.1.0** (2026-04-15): LdapConnection migration
+  - Replaced legacy `DirectoryEntry`/`DirectorySearcher` ADSI stack with
+    `System.DirectoryServices.Protocols.LdapConnection` via the shared
+    `ADLdap.ps1` helper. Works against DCs enforcing LDAP Channel Binding
+    and LDAP Signing (the hardened modern default).
+  - `Helpers.ps1` `Get-RootDSE` / `New-LdapSearcher` / `Invoke-LdapQuery`
+    preserved as public API; internals rewritten as shims over ADLdap with
+    automatic DateTime conversion for Generalized Time attributes and
+    binary passthrough for SID/GUID/certificate attributes.
+  - Per-run `LdapConnection` pool installed at the orchestrator level;
+    reused across every discovery module.
+  - `-AllowInsecure` switch: enables LDAPS cert-bypass and LDAP 389
+    Kerberos sign+seal fallback tiers.
+  - `-Help` switch and friendly usage output on bare invocation.
+  - Bug fixes: `Join-Path` three-argument call incompatible with PS 5.1;
+    shim `SearchScope` passthrough for consumers overriding the default.
 
 - **1.0.0** (2026-01-30): Initial release
   - Core discovery modules (Forest, Schema, OUs)

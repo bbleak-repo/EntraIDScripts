@@ -4,49 +4,86 @@
 
 .DESCRIPTION
     Enterprise-grade AD discovery tool for environments without RSAT or admin rights.
-    Supports cross-platform testing with mock data provider.
+    Runs on the modern System.DirectoryServices.Protocols.LdapConnection stack
+    (via ADLdap.ps1), so it works against DCs enforcing LDAP Channel Binding
+    and LDAP Signing -- the hardened modern default.
+
+    Discovery modules: ForestDomain, Schema, OUStructure, SitesSubnets, Trusts,
+    DomainControllers, Groups, DNS. A connection pool is installed at startup
+    so every module reuses the same LdapConnection per server.
 
     Features:
     - Comprehensive AD structure discovery
     - Two-domain comparison with delta reporting
-    - HTML and JSON output formats
-    - Mock data provider for macOS/Linux testing
+    - HTML, JSON, and CSV output formats
+    - Mock data provider for macOS/Linux testing (-UseMock)
+    - Tiered connection strategy (-AllowInsecure for fallback tiers)
     - Modular architecture for easy extension
 
 .PARAMETER Server
-    Primary domain controller FQDN or domain name
+    Primary domain controller FQDN or domain name. Required unless -UseMock.
 
 .PARAMETER CompareServer
-    Second domain for comparison (optional)
+    Second domain for comparison (optional).
 
 .PARAMETER UseMock
-    Use mock data provider for cross-platform testing
+    Use mock data provider for cross-platform testing. Skips all LDAP work.
 
 .PARAMETER Format
-    Output formats: HTML, JSON (default from config)
+    Output formats: HTML, JSON, CSV (default from config).
 
 .PARAMETER SkipModules
-    Modules to skip during discovery
+    Discovery modules to skip by name.
 
 .PARAMETER Credential
-    Credentials for primary domain
+    Credentials for primary domain. Defaults to current Windows identity (Kerberos).
 
 .PARAMETER CompareCredential
-    Credentials for comparison domain
+    Credentials for the comparison domain.
 
 .PARAMETER OutputPath
-    Output directory (default from config)
+    Output directory override (default from config).
+
+.PARAMETER AllowInsecure
+    Enable fallback tiers when verified LDAPS fails. Tier order:
+      Tier 1: LDAPS 636, cert verified           (always attempted)
+      Tier 2: LDAPS 636, cert bypass             (this switch)
+      Tier 3: LDAP  389, SASL sign+seal          (this switch)
+    Required when the workstation cannot validate the DC's TLS certificate
+    (cross-forest, lab environments, or rotated certs).
+
+.PARAMETER Help
+    Show a usage summary with examples and exit. Also shown when the script
+    is invoked with no arguments.
+
+.EXAMPLE
+    .\AD-Discovery.ps1 -Server delusionalsecurity.review
+    Simplest live discovery against a single domain.
+
+.EXAMPLE
+    .\AD-Discovery.ps1 -Server delusionalsecurity.review -AllowInsecure
+    Live discovery with fallback tiers enabled (lab/cross-forest/cert mismatch).
+
+.EXAMPLE
+    .\AD-Discovery.ps1 -Server dc01.contoso.com -CompareServer dc01.fabrikam.com -AllowInsecure
+    Two-domain comparison for migration or drift analysis.
+
+.EXAMPLE
+    $cred = Get-Credential
+    .\AD-Discovery.ps1 -Server delusionalsecurity.review -Credential $cred -AllowInsecure
+    Pass explicit credentials instead of using Kerberos integrated auth.
 
 .EXAMPLE
     .\AD-Discovery.ps1 -UseMock -Server mock-prod.local -CompareServer mock-dev.local
-
-.EXAMPLE
-    .\AD-Discovery.ps1 -Server dc01.contoso.com -Credential $cred -Format HTML,JSON
+    Mock mode -- no AD access required, runs anywhere.
 
 .NOTES
     Author: AD Discovery Team
     Requires: PowerShell 5.1 or PowerShell 7+
     Compatible: Windows (native), macOS/Linux (mock mode)
+
+    Run with no arguments or -Help for a usage summary with examples.
+    Run 'Get-Help .\AD-Discovery.ps1 -Detailed' for full parameter docs.
 #>
 
 [CmdletBinding()]
@@ -74,13 +111,100 @@ param(
     [PSCredential]$CompareCredential,
 
     [Parameter(Mandatory = $false)]
-    [string]$OutputPath
+    [string]$OutputPath,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$AllowInsecure,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Help
 )
 
 # Script configuration
 $ErrorActionPreference = 'Stop'
 $scriptRoot = $PSScriptRoot
 $configPath = Join-Path $scriptRoot 'Config\discovery-config.json'
+
+# ---------------------------------------------------------------------------
+# Usage / help output when invoked with no args or -Help
+# ---------------------------------------------------------------------------
+function Show-Usage {
+    $self = Split-Path -Leaf $PSCommandPath
+    $lines = @(
+        ''
+        'Active Directory Discovery and Comparison Tool'
+        '=============================================='
+        'Discovers AD structure (forest, domain, DCs, OUs, groups, sites, trusts,'
+        'schema, DNS) and produces HTML / JSON / CSV reports. Can compare two'
+        'domains for migration or drift analysis. Uses the modern LdapConnection'
+        'stack via ADLdap.ps1, so it works against DCs enforcing LDAP Channel'
+        'Binding / Signing.'
+        ''
+        'USAGE'
+        "  .\$self -Server <dc-or-domain> [options]"
+        "  .\$self -UseMock [options]"
+        "  .\$self -Help"
+        ''
+        'REQUIRED (one of)'
+        '  -Server <name>           DC hostname or domain FQDN to discover'
+        '  -UseMock                 Run against the built-in mock provider (no AD needed)'
+        ''
+        'COMPARISON'
+        '  -CompareServer <name>    Second DC/domain to compare against'
+        '  -CompareCredential <c>   Credentials for the compare target'
+        ''
+        'CONNECTIVITY'
+        '  -Credential <pscred>     Explicit credentials (default = current user via Kerberos)'
+        '  -AllowInsecure           Enable fallback tiers when Tier 1 (verified LDAPS) fails:'
+        '                             Tier 2: LDAPS 636 with cert bypass'
+        '                             Tier 3: LDAP  389 with Kerberos sign+seal'
+        ''
+        'OUTPUT'
+        '  -Format HTML,JSON,CSV    Output formats (defaults from config)'
+        '  -OutputPath <dir>        Override output directory'
+        '  -SkipModules <names>     Skip specific discovery modules by name'
+        ''
+        'EXAMPLES'
+        ''
+        '  # Simplest live discovery against a domain'
+        "  .\$self -Server delusionalsecurity.review"
+        ''
+        '  # Live discovery against a DC with an untrusted cert (lab / cross-forest)'
+        "  .\$self -Server delusionalsecurity.review -AllowInsecure"
+        ''
+        '  # Two-domain comparison for migration / drift'
+        "  .\$self -Server dc01.contoso.com -CompareServer dc01.fabrikam.com -AllowInsecure"
+        ''
+        '  # With explicit credentials'
+        '  $cred = Get-Credential'
+        "  .\$self -Server delusionalsecurity.review -Credential `$cred -AllowInsecure"
+        ''
+        '  # Specific output formats'
+        "  .\$self -Server delusionalsecurity.review -Format HTML,JSON -AllowInsecure"
+        ''
+        '  # Mock mode for testing on macOS / Linux or without AD access'
+        "  .\$self -UseMock -Server mock-prod.local -CompareServer mock-dev.local"
+        ''
+        '  # Skip slower / unwanted modules'
+        "  .\$self -Server delusionalsecurity.review -SkipModules Schema,DNS -AllowInsecure"
+        ''
+        'MORE'
+        "  Full parameter docs:  Get-Help .\$self -Detailed"
+        '  Discovery modules:    ForestDomain, Schema, OUStructure, SitesSubnets,'
+        '                        Trusts, DomainControllers, Groups, DNS'
+        ''
+    )
+    $lines | ForEach-Object { Write-Host $_ }
+}
+
+if ($Help -or (-not $Server -and -not $UseMock)) {
+    Show-Usage
+    if (-not $Help -and -not $Server -and -not $UseMock) {
+        Write-Host 'ERROR: -Server or -UseMock is required.' -ForegroundColor Red
+        exit 2
+    }
+    exit 0
+}
 
 # Load configuration
 Write-Host "Loading configuration..." -ForegroundColor Cyan
@@ -123,6 +247,7 @@ if (-not (Test-Path $outputDir)) {
 # Dot-source all modules
 Write-Host "Loading modules..." -ForegroundColor Cyan
 $moduleFiles = @(
+    'ADLdap.ps1',
     'Helpers.ps1',
     'MockProvider.ps1',
     'ForestDomain.ps1',
@@ -177,6 +302,26 @@ if (-not $Server -and -not $UseMock) {
 if ($UseMock -and -not $Server) {
     $Server = 'mock-prod.local'
     Write-Host "  Using default mock domain: $Server" -ForegroundColor Yellow
+}
+
+# Surface -AllowInsecure into the config hash so downstream LDAP calls
+# (Invoke-LdapQuery, New-AdLdapConnection) see it via $Searcher.Config.
+if ($AllowInsecure) {
+    $configHash.AllowInsecure = $true
+}
+
+# Per-run LDAP connection pool. Lives in script scope so the ADLdap shim
+# in Helpers.ps1 can pick it up transparently. Only installed for live-AD
+# runs; mock mode skips LDAP entirely.
+$script:AdLdapPool = $null
+if (-not $UseMock) {
+    $poolParams = @{
+        AllowInsecure  = [bool]$AllowInsecure
+        TimeoutSeconds = if ($configHash.LdapTimeout) { [int]$configHash.LdapTimeout } else { 120 }
+    }
+    if ($Credential) { $poolParams.Credential = $Credential }
+    $script:AdLdapPool = New-AdLdapConnectionPool @poolParams
+    Write-Host "  LDAP connection pool installed (AllowInsecure=$AllowInsecure)" -ForegroundColor Gray
 }
 
 # Define discovery modules
@@ -265,7 +410,8 @@ function Invoke-Discovery {
     return $results
 }
 
-# Run primary discovery
+# Run primary discovery (wrapped so the pool is disposed on any exit path)
+try {
 $primaryResults = Invoke-Discovery -DomainServer $Server -DomainCredential $Credential -Label $Server
 
 # Run comparison discovery if requested
@@ -307,7 +453,8 @@ $generatedFiles = @()
 # HTML output
 if ('HTML' -in $configHash.DefaultOutputFormats) {
     $htmlOutputPath = Join-Path $outputDir "discovery-$timestamp.html"
-    $templatePath = Join-Path $scriptRoot 'Templates' 'report-template.html'
+    # PS 5.1's Join-Path only accepts 2 path components; chain for compat.
+    $templatePath = Join-Path (Join-Path $scriptRoot 'Templates') 'report-template.html'
 
     try {
         $htmlFile = Export-HTMLReport -PrimaryResults $primaryResults `
@@ -382,4 +529,11 @@ return @{
     CompareResults = $compareResults
     OutputFiles = $generatedFiles
     Timestamp = $timestamp
+}
+
+} finally {
+    if ($script:AdLdapPool) {
+        try { Close-AdLdapConnectionPool $script:AdLdapPool } catch { }
+        $script:AdLdapPool = $null
+    }
 }
