@@ -145,8 +145,8 @@ function Export-MigrationReport {
         $skippedResults  = @($GroupResults | Where-Object { $_.Data.Skipped -eq $true })
         $enumerated      = @($GroupResults | Where-Object { $_.Data.Skipped -ne $true })
 
-        $totalMembers = ($enumerated | Measure-Object -Property { $_.Data.MemberCount } -Sum).Sum
-        if (-not $totalMembers) { $totalMembers = 0 }
+        $totalMembers = 0
+        foreach ($e in $enumerated) { $totalMembers += [int]$e.Data.MemberCount }
 
         # ---- Categorise match results ----
         $matchedItems   = @()
@@ -176,10 +176,12 @@ function Export-MigrationReport {
             $totalCrItems     = if ($null -ne $OverallReadiness.TotalCrItems)     { [int]$OverallReadiness.TotalCrItems }      else { 0 }
         } elseif ($GapResults -and $GapResults.Count -gt 0) {
             # Derive from gap results when no explicit OverallReadiness supplied
-            $totalCrItems    = ($GapResults | Measure-Object -Property { $_.CrCount } -Sum).Sum
-            if (-not $totalCrItems) { $totalCrItems = 0 }
-            $pctSum = ($GapResults | Measure-Object -Property { $_.ReadinessPercent } -Sum).Sum
-            if (-not $pctSum) { $pctSum = 0 }
+            $totalCrItems = 0
+            $pctSum = 0
+            foreach ($gr in $GapResults) {
+                $totalCrItems += [int]$gr.CrCount
+                $pctSum       += [double]$gr.ReadinessPercent
+            }
             $readinessPct    = if ($GapResults.Count -gt 0) { [int]($pctSum / $GapResults.Count) } else { 0 }
             $readyGroups     = @($GapResults | Where-Object { $_.ReadinessPercent -ge 80 }).Count
             $inProgressGroups = @($GapResults | Where-Object { $_.ReadinessPercent -ge 50 -and $_.ReadinessPercent -lt 80 }).Count

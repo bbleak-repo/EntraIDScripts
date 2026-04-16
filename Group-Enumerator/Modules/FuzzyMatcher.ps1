@@ -299,7 +299,7 @@ function Find-MatchingGroups {
         $group = $byNormalized[$key]
 
         # A match requires items from at least two distinct domains
-        $distinctDomains = $group | Select-Object -ExpandProperty Domain -Unique
+        $distinctDomains = @($group | ForEach-Object { $_.Domain } | Sort-Object -Unique)
         if ($distinctDomains.Count -ge 2) {
             $matched += @{
                 NormalizedName = $key

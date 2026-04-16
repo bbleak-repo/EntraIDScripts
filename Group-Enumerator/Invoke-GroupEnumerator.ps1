@@ -661,9 +661,9 @@ try {
                 $totalLowConf    += $corrResult.Summary.LowConfidence
 
             } catch {
-                Write-Warning "User correlation failed for pair $corrKey: $_"
+                Write-Warning "User correlation failed for pair ${corrKey}: $_"
                 Write-GroupEnumLog -Level 'ERROR' -Operation 'UserCorrelation' `
-                    -Message "User correlation failed for pair $corrKey: $_" `
+                    -Message "User correlation failed for pair ${corrKey}: $_" `
                     -Context @{ corrKey = $corrKey; error = $_.ToString() }
             }
         }
@@ -725,9 +725,9 @@ try {
                 $gapResult   = Get-MigrationGapAnalysis @gapParams
                 $gapResults += $gapResult
             } catch {
-                Write-Warning "Gap analysis failed for pair $corrKey: $_"
+                Write-Warning "Gap analysis failed for pair ${corrKey}: $_"
                 Write-GroupEnumLog -Level 'ERROR' -Operation 'GapAnalysis' `
-                    -Message "Gap analysis failed for pair $corrKey: $_" `
+                    -Message "Gap analysis failed for pair ${corrKey}: $_" `
                     -Context @{ corrKey = $corrKey; error = $_.ToString() }
             }
         }
@@ -928,8 +928,8 @@ try {
     # =========================================================================
     $enumerated   = @($groupResults | Where-Object { -not $_.Data.Skipped })
     $skippedFinal = @($groupResults | Where-Object { $_.Data.Skipped })
-    $totalMembers = ($enumerated | Measure-Object -Property { $_.Data.MemberCount } -Sum).Sum
-    if (-not $totalMembers) { $totalMembers = 0 }
+    $totalMembers = 0
+    foreach ($e in $enumerated) { $totalMembers += [int]$e.Data.MemberCount }
     $errGroups    = @($groupResults | Where-Object { $_.Errors.Count -gt 0 })
 
     Write-Host '========================================' -ForegroundColor Cyan
