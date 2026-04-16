@@ -169,11 +169,19 @@ function Export-MigrationReport {
         $totalCrItems    = 0
 
         if ($OverallReadiness) {
-            $readinessPct     = if ($null -ne $OverallReadiness.ReadinessPercent) { [int]$OverallReadiness.ReadinessPercent }  else { 0 }
+            # GapAnalysis emits OverallPercent / TotalCRItems; older callers may
+            # supply ReadinessPercent / TotalCrItems. Accept either.
+            $pctValue = if ($null -ne $OverallReadiness.OverallPercent)    { $OverallReadiness.OverallPercent }
+                        elseif ($null -ne $OverallReadiness.ReadinessPercent) { $OverallReadiness.ReadinessPercent }
+                        else { 0 }
+            $readinessPct     = [int][Math]::Round([double]$pctValue)
             $readyGroups      = if ($null -ne $OverallReadiness.ReadyGroups)      { [int]$OverallReadiness.ReadyGroups }       else { 0 }
             $inProgressGroups = if ($null -ne $OverallReadiness.InProgressGroups) { [int]$OverallReadiness.InProgressGroups } else { 0 }
             $blockedGroups    = if ($null -ne $OverallReadiness.BlockedGroups)    { [int]$OverallReadiness.BlockedGroups }     else { 0 }
-            $totalCrItems     = if ($null -ne $OverallReadiness.TotalCrItems)     { [int]$OverallReadiness.TotalCrItems }      else { 0 }
+            $crValue = if ($null -ne $OverallReadiness.TotalCRItems)      { $OverallReadiness.TotalCRItems }
+                       elseif ($null -ne $OverallReadiness.TotalCrItems)  { $OverallReadiness.TotalCrItems }
+                       else { 0 }
+            $totalCrItems = [int]$crValue
         } elseif ($GapResults -and $GapResults.Count -gt 0) {
             # Derive from gap results when no explicit OverallReadiness supplied
             $totalCrItems = 0
