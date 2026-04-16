@@ -640,7 +640,12 @@ try {
         $nestedUsersTotal = 0
 
         foreach ($groupResult in $groupResults) {
-            if ($groupResult.Data.Skipped -or $groupResult.Errors.Count -gt 0) { continue }
+            # Filter out benign tier-downgrade warnings (string-prefixed
+            # "WARNING: Using tier ...") before deciding whether to skip.
+            # They indicate successful enumeration via a fallback tier, not a
+            # real error, and downstream processing should still run.
+            $fatalErrs = @($groupResult.Errors | Where-Object { $_ -notlike 'WARNING: Using tier*' })
+            if ($groupResult.Data.Skipped -or $fatalErrs.Count -gt 0) { continue }
 
             $nestedParams = @{
                 Domain         = $groupResult.Data.Domain
@@ -695,7 +700,12 @@ try {
         $staleTotalFlag = 0
 
         foreach ($groupResult in $groupResults) {
-            if ($groupResult.Data.Skipped -or $groupResult.Errors.Count -gt 0) { continue }
+            # Filter out benign tier-downgrade warnings (string-prefixed
+            # "WARNING: Using tier ...") before deciding whether to skip.
+            # They indicate successful enumeration via a fallback tier, not a
+            # real error, and downstream processing should still run.
+            $fatalErrs = @($groupResult.Errors | Where-Object { $_ -notlike 'WARNING: Using tier*' })
+            if ($groupResult.Data.Skipped -or $fatalErrs.Count -gt 0) { continue }
             if (-not $groupResult.Data.Members -or $groupResult.Data.Members.Count -eq 0) { continue }
 
             $staleKey = "$($groupResult.Data.Domain)|$($groupResult.Data.GroupName)"
