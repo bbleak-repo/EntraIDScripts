@@ -3,21 +3,29 @@
     Cross-domain group membership enumeration orchestrator
 
 .DESCRIPTION
-    Reads a CSV of domain/group pairs, enumerates members from each AD domain via LDAPS,
-    optionally runs fuzzy cross-domain name matching, and produces an HTML report and/or
-    JSON cache file.
+    Reads a CSV of domain/group pairs, enumerates members from each AD domain via
+    System.DirectoryServices.Protocols.LdapConnection (the modern LDAP stack that
+    works against DCs enforcing LDAP Channel Binding / Signing), optionally runs
+    fuzzy cross-domain name matching, and produces an HTML report and/or JSON cache.
 
-    Features:
+    Works equally well for single-domain inventory and multi-forest migration
+    readiness. Cross-domain and cross-forest features are opt-in switches.
+
+    Core features:
     - CSV input in Domain,GroupName or DOMAIN\GroupName backslash format
-    - LDAPS-only enumeration (port 636) via GroupEnumerator module
-    - Levenshtein-based fuzzy cross-domain group matching
-    - Professional dark/light-theme HTML report
-    - JSON cache for offline report regeneration with -FromCache
+    - Per-domain connection pooling (one LdapConnection reused across all groups)
+    - Tiered connection strategy with optional cert-verification bypass and
+      Kerberos sign+seal fallback on 389 (-AllowInsecure)
+    - Dark/light HTML reports, JSON cache for offline report regeneration
+    - Structured JSON Lines logs with per-tier LdapConnect events
 
     V2 features (enabled by switches):
     - Nested group resolution to flat user lists (-ResolveNested)
     - Stale/disabled account detection (-DetectStale)
+    - Fuzzy cross-domain group name matching via Levenshtein (-FuzzyMatch)
     - Cross-domain user correlation and gap analysis (-AnalyzeGaps)
+    - Cross-forest member resolution when multiple domains are pooled:
+      direct foreign DN routing and ForeignSecurityPrincipal SID lookup
     - Application-level readiness from CSV mapping (-AppMappingCsv)
     - SMTP delivery of migration readiness report (-SendEmail)
 
@@ -81,27 +89,51 @@
     Override the StaleAccountDays config value. 0 = use config value.
 
 .EXAMPLE
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv
+    Simplest single-domain inventory. Produces V1 HTML + JSON cache.
+
+.EXAMPLE
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -ResolveNested -DetectStale
+    Single-domain inventory with nested group flattening and stale account flagging.
+
+.EXAMPLE
     .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch
+    Cross-domain fuzzy match. Verified LDAPS only (Tier 1).
 
 .EXAMPLE
-    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -Credential $cred -Theme light -NoCache
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -AnalyzeGaps -DetectStale -ResolveNested -AllowInsecure
+    Full two-forest migration readiness pipeline with all fallback tiers enabled.
 
 .EXAMPLE
-    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FromCache -CachePath .\Cache\groups-20260408.json
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FromCache -CachePath .\Cache\groups-20260415-103821.json
+    Offline re-render of an HTML report from a saved JSON cache. No AD access.
 
 .EXAMPLE
-    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -AnalyzeGaps -DetectStale -ResolveNested
+    $cred = Get-Credential
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -Credential $cred
+    Pass explicit credentials (Kerberos integrated auth otherwise).
 
 .NOTES
     Author: EntraID Team
     Requires: PowerShell 5.1 or PowerShell 7+
-    Always uses LDAPS (port 636). Never uses plaintext LDAP 389.
+
+    Connection tiers (tried in order, highest security first):
+      Tier 1: LDAPS 636, cert verification strict       (always attempted)
+      Tier 2: LDAPS 636, cert verification bypassed     (requires -AllowInsecure)
+      Tier 3: LDAP  389, SASL sign + seal (Kerberos)    (requires -AllowInsecure)
+      Tier 4: LDAP  389, no signing/sealing             (not reachable via switches)
+
+    Run with no arguments or -Help for a usage summary with examples.
+    Run 'Get-Help .\Invoke-GroupEnumerator.ps1 -Detailed' for full parameter docs.
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$CsvPath,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Help,
 
     [Parameter(Mandatory = $false)]
     [PSCredential]$Credential,
@@ -155,6 +187,89 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $scriptRoot = $PSScriptRoot
+
+# ---------------------------------------------------------------------------
+# Usage / help output when invoked with no args or -Help
+# ---------------------------------------------------------------------------
+function Show-Usage {
+    $self = Split-Path -Leaf $PSCommandPath
+    $lines = @(
+        ''
+        'Cross-Domain Group Enumerator'
+        '============================='
+        'Enumerates Active Directory group membership via LdapConnection.'
+        'Works for single-domain inventory and cross-forest migration readiness.'
+        ''
+        'USAGE'
+        "  .\$self -CsvPath <file> [options]"
+        "  .\$self -Help"
+        ''
+        'REQUIRED'
+        '  -CsvPath <path>          CSV of groups to enumerate'
+        '                             columns: Domain,GroupName  OR  Group (DOMAIN\GroupName)'
+        ''
+        'CONNECTIVITY'
+        '  -Credential <pscred>     Pass explicit creds (default = current user via Kerberos)'
+        '  -AllowInsecure           Enable fallback tiers when Tier 1 (verified LDAPS) fails:'
+        '                             Tier 2: LDAPS 636 with cert bypass'
+        '                             Tier 3: LDAP  389 with Kerberos sign+seal'
+        ''
+        'ANALYSIS SWITCHES'
+        '  -ResolveNested           Flatten nested group memberships (recursive)'
+        '  -DetectStale             Flag disabled and inactive accounts'
+        '  -FuzzyMatch              Cross-domain fuzzy group name matching (Levenshtein)'
+        '  -AnalyzeGaps             Migration gap analysis + Change Requests (needs -FuzzyMatch)'
+        '  -AppMappingCsv <path>    Optional app-to-group readiness mapping'
+        '  -StaleDays <n>           Override stale threshold (default: config value, 90)'
+        ''
+        'OUTPUT / CACHE'
+        '  -OutputPath <dir>        Output directory for reports (default: ./Output)'
+        '  -CachePath <path>        Cache file (for -FromCache) or directory (for writes)'
+        '  -FromCache               Skip LDAP; regenerate reports from a saved cache'
+        '  -JsonOnly                Write JSON cache only, skip HTML report'
+        '  -NoCache                 Skip writing the JSON cache'
+        '  -Theme dark|light        Initial HTML theme (default: dark)'
+        '  -ConfigPath <path>       Override config file location'
+        '  -SendEmail               Send the migration report via SMTP (config must enable this)'
+        ''
+        'EXAMPLES'
+        ''
+        '  # Simplest single-domain inventory (V1 report)'
+        "  .\$self -CsvPath .\groups.csv"
+        ''
+        '  # Single-domain with nested resolution + stale detection'
+        "  .\$self -CsvPath .\groups.csv -ResolveNested -DetectStale"
+        ''
+        '  # Cross-domain fuzzy match, verified LDAPS only'
+        "  .\$self -CsvPath .\groups.csv -FuzzyMatch"
+        ''
+        '  # Full two-forest migration readiness pipeline with fallback tiers'
+        "  .\$self -CsvPath .\groups.csv -FuzzyMatch -AnalyzeGaps -DetectStale -ResolveNested -AllowInsecure"
+        ''
+        '  # Offline re-render from a saved cache (no AD access)'
+        "  .\$self -CsvPath .\groups.csv -FromCache -CachePath .\Cache\groups-20260415-103821.json"
+        ''
+        '  # With explicit credentials'
+        '  $cred = Get-Credential'
+        "  .\$self -CsvPath .\groups.csv -FuzzyMatch -Credential `$cred"
+        ''
+        'MORE'
+        "  Full parameter docs:  Get-Help .\$self -Detailed"
+        '  Quick start:          docs/QUICKSTART.md'
+        '  Developer notes:      docs/DEV-GUIDE.md'
+        ''
+    )
+    $lines | ForEach-Object { Write-Host $_ }
+}
+
+if ($Help -or -not $CsvPath) {
+    Show-Usage
+    if (-not $Help -and -not $CsvPath) {
+        Write-Host 'ERROR: -CsvPath is required.' -ForegroundColor Red
+        exit 2
+    }
+    exit 0
+}
 
 # ---------------------------------------------------------------------------
 # Resolve config path default

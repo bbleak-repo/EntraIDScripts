@@ -4,12 +4,13 @@
 
 ```
 Group-Enumerator/
-  Invoke-GroupEnumerator.ps1       # Main orchestrator (all parameters, flow control)
+  Invoke-GroupEnumerator.ps1       # Main orchestrator (pool owner, flow control, -Help)
   Config/
     group-enum-config.json         # Runtime configuration (all settings with defaults)
   Modules/
+    ADLdap.ps1                     # LdapConnection helpers, pool, tiers, binary attrs (CANONICAL)
     GroupEnumLogger.ps1            # JSON Lines structured logging
-    GroupEnumerator.ps1            # LDAP enumeration, CSV import, config loading
+    GroupEnumerator.ps1            # Group enumeration + cross-forest member resolution
     FuzzyMatcher.ps1               # Levenshtein fuzzy group name matching
     GroupReportGenerator.ps1       # V1 HTML report (group comparison)
     NestedGroupResolver.ps1        # Recursive group member flattening
@@ -25,7 +26,16 @@ Group-Enumerator/
   Tests/
     Test-GroupEnumerator.ps1       # 141 v1 tests
     Test-MigrationReadiness.ps1    # 150 v2 tests
+    fixtures/
+      test-groups.csv              # Example CSVs used for smoke runs
+      test-groups-ip.csv
+      Build-SyntheticTwoForest.ps1 # Fabricates a 2-forest cache from a 1-forest one
 ```
+
+`ADLdap.ps1` is marked CANONICAL in its header comment. It is intentionally
+self-contained (no dependencies on anything else in this repo) so it can be
+copy-vendored into sibling AD tools. When fixing bugs, update the canonical
+copy and diff-sync any vendored copies.
 
 ## Conventions
 
@@ -40,12 +50,47 @@ All modules are dot-sourced (not `.psm1`). They do NOT use `Export-ModuleMember`
 }
 ```
 
-### LDAP
-- Always use `objectCategory` (indexed) in filters, never `objectClass`
-- Always dispose `DirectoryEntry`, `DirectorySearcher`, and `SearchResultCollection` in `finally` blocks
-- Use `New-LdapDirectoryEntry` helper for connection management (handles LDAPS/Kerberos fallback)
-- LDAPS on port 636 with `SecureSocketsLayer` authentication type
-- LDAP fallback on port 389 with `Secure -bor Sealing` for Kerberos encryption
+### LDAP (ADLdap.ps1)
+All LDAP work goes through the `ADLdap.ps1` helper. The legacy
+`System.DirectoryServices.DirectoryEntry` / `DirectorySearcher` ADSI stack is
+not used anywhere in this project -- it cannot bind to DCs that enforce LDAP
+Channel Binding, which is the hardened modern default.
+
+**Public API:**
+```powershell
+# Connection
+$ctx  = New-AdLdapConnection -Server $domain [-Credential $c] [-AllowInsecure] [-TimeoutSeconds 120]
+# Returns @{ Connection; BaseDN; Tier; Port; Secure; Server; Errors }
+
+# Pooling (one LdapConnection per domain, owned by the caller)
+$pool = New-AdLdapConnectionPool [-Credential $c] [-AllowInsecure] [-TimeoutSeconds 120]
+$ctx  = Get-AdLdapPooledContext -Pool $pool -Domain $domain     # lazy open
+Close-AdLdapConnectionPool $pool                                # dispose all
+
+# Search (handles paging via PageResultRequestControl)
+$hits = Invoke-AdLdapSearch -Context $ctx `
+    -Filter '(&(objectCategory=group)(cn=Domain Admins))' `
+    -Scope Subtree -Attributes @('distinguishedName','member') `
+    [-BinaryAttributes @('objectSid','objectGUID')] `
+    [-PageSize 1000] [-SizeLimit 0] [-TimeoutSeconds 120]
+# Returns hashtable[], each @{ DistinguishedName; <attr> = <string|string[]|byte[]> }
+
+# Cross-forest helpers
+$foreign = Get-AdLdapContextForDN -Pool $pool -DistinguishedName $dn       # longest-suffix match
+$sidStr  = ConvertTo-AdLdapSidString -SidBytes $bytes
+$sidFlt  = ConvertTo-AdLdapSidFilter -SidBytes $bytes                       # for (objectSid=...)
+$domSid  = Get-AdLdapDomainSid -Pool $pool -Context $ctx                   # cached on pool
+
+# Single-shot disposal
+Close-AdLdapConnection $ctx
+```
+
+**Conventions:**
+- Always use `objectCategory` (indexed) in filters, never `objectClass`.
+- Attribute reads from `Invoke-AdLdapSearch` come back as scalar string (1 value), string array (>1 values), or missing from the hashtable (0 values). Always guard multi-valued reads with `$h.ContainsKey('attr')` and `$h.attr -is [array]`.
+- Binary attributes (`objectSid`, `objectGUID`, etc.) must be listed in `-BinaryAttributes` or they'll be mangled by a `[string]` cast. Listed attrs come back as `byte[]` (or `byte[][]` for multi-valued).
+- For functions that accept `-ConnectionPool`, use `Get-AdLdapPooledContext` to acquire and do NOT close the context in `finally` -- the pool owner disposes. When no pool is supplied, open a one-shot context with `New-AdLdapConnection` and close it in `finally`. Gate with an `$ownCtx` boolean: `if ($ctx -and $ownCtx) { Close-AdLdapConnection $ctx }`.
+- Connection tiers (tried in order): LDAPS-Verified, LDAPS-Unverified (requires `-AllowInsecure`), LDAP-SignSeal (requires `-AllowInsecure`), LDAP-Plain (explicit opt-in only). The tier that actually connected is on `$ctx.Tier` and should be propagated into any warning string in the function's `Errors` array.
 
 ### Logging
 ```powershell
@@ -104,31 +149,39 @@ All tests use mock data. No LDAP/AD dependency. Runs on Windows, macOS, Linux.
 ## Adding a New Module
 
 1. Create `Modules/NewModule.ps1` with comment-based help
-2. Add to `$moduleFiles` array in `Invoke-GroupEnumerator.ps1`
+2. Add to `$moduleFiles` array in `Invoke-GroupEnumerator.ps1`. `ADLdap.ps1` must be listed first so new modules can depend on it.
 3. Add to module loading in both test files
 4. Add corresponding tests in the appropriate test file
 5. Update `Config/group-enum-config.json` if new config keys needed
 6. Update `New-GroupEnumConfig` defaults in `GroupEnumerator.ps1`
+7. If the module makes LDAP queries, follow the ADLdap conventions above: accept an optional `-ConnectionPool` parameter, use `Get-AdLdapPooledContext` when it's supplied, fall back to `New-AdLdapConnection` when it isn't, and gate disposal on `$ownCtx`.
 
 ## V1 vs V2 Flow
 
 ```
 V1 (no v2 switches):
-  CSV -> Enumerate -> FuzzyMatch -> Cache -> HTML Report
+  CSV -> Open pool -> Enumerate (per group, pooled ctx) ->
+    -> [FuzzyMatch (optional)] -> Cache -> HTML Report -> Close pool
 
 V2 (-AnalyzeGaps):
-  CSV -> Enumerate -> FuzzyMatch ->
-    -> ResolveNested (optional) ->
-    -> DetectStale (optional) ->
+  CSV -> Open pool -> Enumerate (per group, pooled ctx) ->
+    -> FuzzyMatch ->
+    -> ResolveNested (optional, pooled ctx) ->
+    -> DetectStale (optional, pooled ctx) ->
     -> UserCorrelation (per matched pair) ->
     -> GapAnalysis (per matched pair) ->
     -> OverallReadiness ->
     -> AppMapping (optional) ->
-    -> Cache -> Gap CSV -> CR Summary -> Migration HTML Report
-    -> Email (optional)
+    -> Cache -> Gap CSV -> CR Summary -> Migration HTML Report ->
+    -> Email (optional) -> Close pool
 ```
 
-V1 behavior is completely unchanged when no v2 switches are used. All v2 steps are gated on explicit switches.
+V1 behavior is completely unchanged when no v2 switches are used. All v2 steps
+are gated on explicit switches. The pool is owned by `Invoke-GroupEnumerator.ps1`
+and disposed in a top-level `finally` so connections are always cleaned up even
+on fatal errors. Cross-forest member resolution (direct foreign-DN routing and
+ForeignSecurityPrincipal SID lookup) activates automatically whenever multiple
+domains are in the pool -- it's not behind a switch.
 
 ## User Correlation Tiers
 

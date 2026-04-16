@@ -6,12 +6,14 @@ A production-ready PowerShell tool for enumerating Active Directory group member
 
 ### V1 -- Group Enumeration & Comparison
 - **CSV-driven input** -- `Domain,GroupName` or `DOMAIN\GroupName` backslash format (auto-detected)
-- **LDAPS-first connectivity** -- Port 636 with TLS by default; Kerberos Sealing fallback (389) via `-AllowInsecure` when cross-forest CA trust is unavailable
+- **Modern LDAP stack** -- Built on `System.DirectoryServices.Protocols.LdapConnection` (works against DCs enforcing LDAP Channel Binding / Signing, the modern hardened default)
+- **Tiered connectivity** -- LDAPS-Verified (636) by default; with `-AllowInsecure` falls through LDAPS cert-bypass then LDAP 389 with Kerberos sign+seal; tier in use is surfaced in the report and logs
+- **Per-domain connection pooling** -- One `LdapConnection` per domain, reused across every group, nested-resolve, and stale-check call in a single invocation
 - **Fuzzy group matching** -- Levenshtein-based name matching strips configurable prefixes (GG\_, USV\_, SG\_, DL\_, GL\_) to pair groups across domains
 - **Dark/light HTML reports** -- Theme toggle persisted to localStorage, sortable columns, per-table search, copy-as-TSV for Excel
 - **Side-by-side member diff** -- Color-coded highlighting showing members unique to each domain
 - **JSON cache** -- Save/reload enumerated data with `-FromCache` for offline report regeneration
-- **Structured logging** -- JSON Lines (.jsonl) with DEBUG/INFO/WARN/ERROR levels
+- **Structured logging** -- JSON Lines (.jsonl) with DEBUG/INFO/WARN/ERROR levels, per-tier LdapConnect events
 
 ### V2 -- Migration Readiness Analysis
 - **Nested group resolution** -- Recursive flattening with cycle detection and configurable depth limit
@@ -26,6 +28,7 @@ A production-ready PowerShell tool for enumerating Active Directory group member
   - P2: User exists but missing from target group
   - P3: Orphaned access in target (security review)
 - **Stale account detection** -- Flags disabled and inactive accounts (configurable threshold)
+- **Cross-forest member resolution** -- When multiple domains are pooled, member DNs that live in another pooled domain are routed to the correct connection, and ForeignSecurityPrincipal entries are resolved by SID against the foreign pool (two-way trust scenarios)
 - **Application mapping** -- Optional CSV mapping apps to groups for app-level readiness view
 - **Migration dashboard** -- Progress bars, executive summary, CR summary with copy button
 - **Email delivery** -- Optional SMTP summary (supports anonymous relay and authenticated TLS)
@@ -33,30 +36,42 @@ A production-ready PowerShell tool for enumerating Active Directory group member
 ## Requirements
 
 - PowerShell 5.1 or PowerShell 7+
-- .NET DirectoryServices (included with Windows; available via .NET on other platforms)
-- Network access to target domain controllers (port 636 or 389)
+- `System.DirectoryServices.Protocols` (ships with .NET on Windows; available via .NET on other platforms)
+- Network access to target domain controllers on port 636 (LDAPS) or 389 (LDAP) if using fallback tiers
 - No RSAT modules required
 - No admin rights required (read-only LDAP queries)
+- Works against DCs enforcing LDAP Channel Binding and LDAP Signing (the hardened modern default)
 
 ## Quick Start
 
 ```powershell
-# Basic group enumeration with fuzzy matching
+# Show usage summary (also printed when invoked with no arguments)
+.\Invoke-GroupEnumerator.ps1 -Help
+
+# Simplest single-domain inventory (V1 report)
+.\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv
+
+# Single-domain inventory with nested group flattening and stale flagging
+.\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -ResolveNested -DetectStale
+
+# Cross-domain fuzzy match (verified LDAPS only)
 .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch
 
-# Cross-forest with Kerberos Sealing fallback
-.\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -AllowInsecure
+# Full two-forest migration readiness with fallback tiers enabled
+.\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch `
+    -AnalyzeGaps -DetectStale -ResolveNested -AllowInsecure
 
-# Full migration readiness analysis
-.\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -AllowInsecure `
-    -AnalyzeGaps -DetectStale -ResolveNested
+# Offline re-render from a saved cache (no AD access)
+.\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FromCache `
+    -CachePath .\Cache\groups-20260415-103821.json
 
 # With application mapping
 .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -AllowInsecure `
     -AnalyzeGaps -DetectStale -AppMappingCsv .\app-mapping.csv
 ```
 
-See [QUICKSTART.md](docs/QUICKSTART.md) for detailed setup instructions.
+See [QUICKSTART.md](docs/QUICKSTART.md) for detailed setup instructions, or run
+`Get-Help .\Invoke-GroupEnumerator.ps1 -Detailed` for full parameter docs.
 
 ## CSV Input Format
 
@@ -115,12 +130,13 @@ Edit `Config/group-enum-config.json` to customize:
 
 ```
 Group-Enumerator/
-  Invoke-GroupEnumerator.ps1       # Main orchestrator
+  Invoke-GroupEnumerator.ps1       # Main orchestrator (pool owner, flow control)
   Config/
     group-enum-config.json         # All settings
   Modules/
+    ADLdap.ps1                     # Shared LDAP helper (LdapConnection, pool, tiers)
     GroupEnumLogger.ps1            # JSON Lines structured logging
-    GroupEnumerator.ps1            # LDAP enumeration + CSV import
+    GroupEnumerator.ps1            # Group enumeration + cross-forest member resolution
     FuzzyMatcher.ps1               # Levenshtein fuzzy group matching
     GroupReportGenerator.ps1       # V1 HTML report generation
     NestedGroupResolver.ps1        # Recursive group flattening
@@ -136,10 +152,19 @@ Group-Enumerator/
   Tests/
     Test-GroupEnumerator.ps1       # 141 tests (v1 features)
     Test-MigrationReadiness.ps1    # 150 tests (v2 features)
+    fixtures/
+      test-groups.csv              # Example CSV for smoke testing
+      test-groups-ip.csv           # Example CSV targeting a DC by IP
+      Build-SyntheticTwoForest.ps1 # Builds a synthetic two-forest cache from a real one
   docs/
     QUICKSTART.md
     DEV-GUIDE.md
 ```
+
+`ADLdap.ps1` is a self-contained, vendored helper with no dependencies on
+anything else in this repo. It can be dropped into any sibling AD tool's
+`Modules/` directory and dot-sourced; the file header marks it as the canonical
+copy so future vendored copies can be diff-synced.
 
 ## Testing
 
@@ -155,13 +180,22 @@ All tests use mock data and run on any platform (Windows, macOS, Linux).
 
 ## LDAP Connection Strategy
 
-| Tier | Port | Security | When Used |
-|------|------|----------|-----------|
-| 1 (default) | 636 | Full TLS (LDAPS) | Client trusts remote DC's CA |
-| 2 (fallback) | 389 | Kerberos Sealing (SASL/GSSAPI) | `-AllowInsecure` + domain trust |
-| 3 (last resort) | 389 | Kerberos auth only | `-AllowInsecure` + explicit credential |
+Connections are built on `System.DirectoryServices.Protocols.LdapConnection`
+with `AuthType.Negotiate` (Kerberos preferred, NTLM fallback). Tiers are tried
+in order of decreasing security and the tier in use is logged as a structured
+`LdapConnect` event and surfaced in the report when any fallback is active.
 
-The tool always tries LDAPS first. Fallback is logged with warnings and tracked in the report metadata.
+| Tier | Port | Encryption | Cert verification | When used |
+|------|------|------------|-------------------|-----------|
+| 1 | 636 | TLS (LDAPS) | strict | **Default. Always attempted.** |
+| 2 | 636 | TLS (LDAPS) | bypassed | `-AllowInsecure` when client cannot validate the DC cert |
+| 3 | 389 | SASL sign + seal (Kerberos-wrapped) | n/a | `-AllowInsecure` when 636 is unreachable on the target DC |
+| 4 | 389 | none | n/a | Not reachable via switches; reserved for explicit opt-in only |
+
+On every successful bind the tool reads the domain's RootDSE for the
+`defaultNamingContext` and caches the connection in the per-run pool, so
+subsequent group/member/nested/stale queries for that domain reuse the same
+authenticated session.
 
 ## License
 
