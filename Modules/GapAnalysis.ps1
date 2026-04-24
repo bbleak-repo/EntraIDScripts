@@ -143,7 +143,9 @@ function Get-GapItemPriority {
 
     switch ($Status) {
         'NotProvisioned'  { return 'P1' }
+        'NotInDomain'     { return 'P1' }
         'AddToGroup'      { return 'P2' }
+        'ExistsNotInGroup' { return 'P2' }
         'OrphanedAccess'  { return 'P3' }
         default           { return 'Info' }
     }
@@ -162,13 +164,15 @@ function Get-GapItemAction {
     )
 
     switch ($Status) {
-        'Ready'          { return 'No action needed' }
-        'AddToGroup'     { return "Add $TargetSam to $TargetDomain\$TargetGroupName" }
-        'NotProvisioned' { return "Provision user account in $TargetDomain domain" }
-        'OrphanedAccess' { return "Review orphaned access for $TargetSam in $TargetDomain\$TargetGroupName" }
-        'Skip-Stale'     { return 'User is stale - excluded from migration scope' }
-        'Skip-Disabled'  { return 'User account is disabled - excluded from migration scope' }
-        default          { return '' }
+        'Ready'            { return 'No action needed' }
+        'AddToGroup'       { return "Add $TargetSam to $TargetDomain\$TargetGroupName" }
+        'ExistsNotInGroup' { return "Add $TargetSam to $TargetDomain\$TargetGroupName (found via domain search)" }
+        'NotProvisioned'   { return "Provision user account in $TargetDomain domain" }
+        'NotInDomain'      { return "Provision user account in $TargetDomain domain (confirmed not found)" }
+        'OrphanedAccess'   { return "Review orphaned access for $TargetSam in $TargetDomain\$TargetGroupName" }
+        'Skip-Stale'       { return 'User is stale - excluded from migration scope' }
+        'Skip-Disabled'    { return 'User account is disabled - excluded from migration scope' }
+        default            { return '' }
     }
 }
 

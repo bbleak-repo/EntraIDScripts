@@ -150,7 +150,13 @@ param(
     [switch]$SendEmail,
 
     [Parameter(Mandatory = $false)]
-    [int]$StaleDays = 0
+    [int]$StaleDays = 0,
+
+    [Parameter(Mandatory = $false)]
+    [string]$MigratingTo,
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetSearchBase
 )
 
 $ErrorActionPreference = 'Stop'
@@ -179,7 +185,8 @@ $moduleFiles = @(
     'StaleAccountDetector.ps1',
     'AppMapping.ps1',
     'MigrationReportGenerator.ps1',
-    'EmailSummary.ps1'
+    'EmailSummary.ps1',
+    'DomainUserLookup.ps1'
 )
 
 foreach ($moduleFile in $moduleFiles) {
@@ -753,6 +760,106 @@ try {
                 overallPercent   = $(if ($overallReadiness) { $overallReadiness.OverallPercent } else { 0 })
                 totalCRItems     = $(if ($overallReadiness) { $overallReadiness.TotalCRItems }   else { 0 })
             }
+    }
+
+    # ---- Step 4b: Domain Existence Resolution (-MigratingTo) ----
+    if ($MigratingTo -and $gapResults.Count -gt 0) {
+        Write-Host "Resolving domain existence in '$MigratingTo'..." -ForegroundColor Cyan
+
+        # Determine SearchBase: explicit param > auto-detect > domain root
+        $resolvedSearchBase = $TargetSearchBase
+
+        if (-not $resolvedSearchBase) {
+            # Try to detect the current user's OU as a suggestion
+            Write-Host '  No -TargetSearchBase provided. Detecting current user OU...' -ForegroundColor Gray
+            $ouDetect = Get-CurrentUserOU -Domain $MigratingTo -Credential $Credential -Config $config
+
+            if ($ouDetect.Detected -and $ouDetect.ParentOU) {
+                Write-Host "  Detected your OU: $($ouDetect.ParentOU)" -ForegroundColor Cyan
+                $useDetected = Read-Host "  Use this OU as SearchBase? [Y/n]"
+                if (-not $useDetected -or $useDetected -imatch '^y') {
+                    $resolvedSearchBase = $ouDetect.ParentOU
+                    Write-Host "  Using detected OU: $resolvedSearchBase" -ForegroundColor Green
+                } else {
+                    Write-Host '  Searching from domain root (may be slower for large domains)' -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "  Could not detect user OU: $($ouDetect.Error)" -ForegroundColor Yellow
+                Write-Host '  Searching from domain root' -ForegroundColor Yellow
+            }
+
+            Write-GroupEnumLog -Level 'INFO' -Operation 'SearchBaseDetect' `
+                -Message "SearchBase detection: $(if ($resolvedSearchBase) { $resolvedSearchBase } else { 'domain root' })" `
+                -Context @{
+                    detected  = $ouDetect.Detected
+                    parentOU  = $ouDetect.ParentOU
+                    userDN    = $ouDetect.UserDN
+                    resolved  = $(if ($resolvedSearchBase) { $resolvedSearchBase } else { '(domain root)' })
+                }
+        }
+
+        # Validate SearchBase if one is set
+        if ($resolvedSearchBase) {
+            Write-Host "  Validating SearchBase: $resolvedSearchBase" -ForegroundColor Gray
+            $sbCheck = Test-SearchBaseExists -Domain $MigratingTo -SearchBase $resolvedSearchBase `
+                -Credential $Credential -Config $config
+
+            if (-not $sbCheck.Exists) {
+                Write-Host "  SearchBase NOT FOUND: $resolvedSearchBase" -ForegroundColor Red
+                if ($sbCheck.Error) {
+                    Write-Host "  Error: $($sbCheck.Error)" -ForegroundColor Red
+                }
+                $continueChoice = Read-Host '  SearchBase not found. Continue searching from domain root instead? [Y/n]'
+                if (-not $continueChoice -or $continueChoice -imatch '^y') {
+                    Write-Host '  Continuing with domain root search' -ForegroundColor Yellow
+                    $resolvedSearchBase = $null
+                } else {
+                    Write-Host '  Skipping domain existence resolution' -ForegroundColor Yellow
+                    $resolvedSearchBase = $null
+                    $MigratingTo = $null  # Skip the resolution
+                }
+
+                Write-GroupEnumLog -Level 'WARN' -Operation 'SearchBaseValidation' `
+                    -Message "SearchBase '$($sbCheck.DN)' not found: $($sbCheck.Error)" `
+                    -Context @{ searchBase = $sbCheck.DN; error = $sbCheck.Error }
+            } else {
+                Write-Host "  SearchBase validated successfully" -ForegroundColor Green
+            }
+        }
+
+        # Run domain existence resolution
+        if ($MigratingTo) {
+            $notProvCount = ($gapResults | ForEach-Object { $_.Items } |
+                Where-Object { $_.Status -eq 'NotProvisioned' }).Count
+
+            if ($notProvCount -gt 0) {
+                Write-Host "  Searching target domain for $notProvCount unmatched user(s)..." -ForegroundColor Gray
+
+                $gapResults = Resolve-DomainExistence `
+                    -GapResults       $gapResults `
+                    -TargetDomain     $MigratingTo `
+                    -TargetSearchBase $resolvedSearchBase `
+                    -Credential       $Credential `
+                    -Config           $config
+
+                # Count reclassifications
+                $existsCount = ($gapResults | ForEach-Object { $_.Items } |
+                    Where-Object { $_.Status -eq 'ExistsNotInGroup' }).Count
+                $notInDomCount = ($gapResults | ForEach-Object { $_.Items } |
+                    Where-Object { $_.Status -eq 'NotInDomain' }).Count
+
+                Write-Host "  Results: $existsCount exist in domain (need group add), $notInDomCount not in domain (need provisioning)" -ForegroundColor Gray
+
+                # Recalculate overall readiness with updated gap results
+                $overallReadiness = Get-OverallMigrationReadiness -GapResults $gapResults `
+                    -AppReadiness $null
+                Write-Host "  Updated readiness: $($overallReadiness.OverallPercent)%" -ForegroundColor Gray
+            } else {
+                Write-Host '  No NotProvisioned users to search for' -ForegroundColor Gray
+            }
+
+            Write-Host ''
+        }
     }
 
     # ---- Step 5: App Mapping ----

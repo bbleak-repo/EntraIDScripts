@@ -963,14 +963,18 @@ function Get-StatusBadgeHtml {
     $normalized = ($Status -replace '\s', '').ToLower()
 
     switch ($normalized) {
-        'ready'           { return "<span class='badge badge-ready'>Ready</span>" }
-        'addtogroup'      { return "<span class='badge badge-addtogroup'>Add to Group</span>" }
-        'notprovisioned'  { return "<span class='badge badge-notprovisioned'>Not Provisioned</span>" }
-        'orphanedaccess'  { return "<span class='badge badge-orphanedaccess'>Orphaned Access</span>" }
-        'skip'            { return "<span class='badge badge-skip'>Skip</span>" }
-        'inprogress'      { return "<span class='badge badge-addtogroup'>In Progress</span>" }
-        'blocked'         { return "<span class='badge badge-notprovisioned'>Blocked</span>" }
-        default           { return "<span class='badge badge-skip'>$(Escape-MigrationHtml $Status)</span>" }
+        'ready'            { return "<span class='badge badge-ready'>Ready</span>" }
+        'addtogroup'       { return "<span class='badge badge-addtogroup'>Add to Group</span>" }
+        'existsnotingroup' { return "<span class='badge badge-addtogroup'>Exists - Add to Group</span>" }
+        'notprovisioned'   { return "<span class='badge badge-notprovisioned'>Not Provisioned</span>" }
+        'notindomain'      { return "<span class='badge badge-notprovisioned'>Not In Domain</span>" }
+        'orphanedaccess'   { return "<span class='badge badge-orphanedaccess'>Orphaned Access</span>" }
+        'skip'             { return "<span class='badge badge-skip'>Skip</span>" }
+        'skip-stale'       { return "<span class='badge badge-skip'>Skip (Stale)</span>" }
+        'skip-disabled'    { return "<span class='badge badge-skip'>Skip (Disabled)</span>" }
+        'inprogress'       { return "<span class='badge badge-addtogroup'>In Progress</span>" }
+        'blocked'          { return "<span class='badge badge-notprovisioned'>Blocked</span>" }
+        default            { return "<span class='badge badge-skip'>$(Escape-MigrationHtml $Status)</span>" }
     }
 }
 
