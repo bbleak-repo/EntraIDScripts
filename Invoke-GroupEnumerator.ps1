@@ -156,7 +156,10 @@ param(
     [string]$MigratingTo,
 
     [Parameter(Mandatory = $false)]
-    [string]$TargetSearchBase
+    [string]$TargetSearchBase,
+
+    [Parameter(Mandatory = $false)]
+    [string[]]$IncludeAttributes = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -393,6 +396,9 @@ try {
                 }
                 if ($Credential) {
                     $enumParams.Credential = $Credential
+                }
+                if ($IncludeAttributes.Count -gt 0) {
+                    $enumParams.IncludeAttributes = $IncludeAttributes
                 }
 
                 $result = Get-GroupMembers @enumParams
@@ -938,6 +944,20 @@ try {
                 Write-GroupEnumLog -Level 'ERROR' -Operation 'ExportCR' `
                     -Message "CR summary export failed: $_" -Context @{ error = $_.ToString() }
                 $crText = ''
+            }
+        }
+
+        # Export app readiness CSV if app mapping was provided
+        if ($appReadiness -and $appReadiness.Apps.Count -gt 0) {
+            $appCsvFileName = "${csvLeaf}-app-readiness-${timestamp}.csv"
+            $appCsvPath     = Join-Path $resolvedOutputDir $appCsvFileName
+            try {
+                $null = Export-AppReadinessCsv -AppReadiness $appReadiness -OutputPath $appCsvPath
+                Write-Host "  App readiness CSV: $appCsvPath" -ForegroundColor Gray
+                Write-GroupEnumLog -Level 'INFO' -Operation 'ExportCsv' `
+                    -Message "App readiness CSV exported" -Context @{ path = $appCsvPath }
+            } catch {
+                Write-Warning "Failed to export app readiness CSV: $_"
             }
         }
 

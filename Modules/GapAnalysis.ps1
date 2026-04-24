@@ -640,9 +640,30 @@ function Export-GapAnalysisCsv {
         return $Value
     }
 
+    # Discover extra attributes beyond the standard set (e.g. Manager, department)
+    $standardKeys = @('SamAccountName','DisplayName','Email','Enabled','Domain','DistinguishedName')
+    $extraAttrNames = @()
+    foreach ($gap in $GapResults) {
+        if (-not $gap.Items) { continue }
+        foreach ($item in $gap.Items) {
+            $srcUser = $item.SourceUser
+            if ($srcUser -and $srcUser -is [hashtable]) {
+                foreach ($k in $srcUser.Keys) {
+                    if ($standardKeys -notcontains $k -and $extraAttrNames -notcontains $k) {
+                        $extraAttrNames += $k
+                    }
+                }
+            }
+        }
+        if ($extraAttrNames.Count -gt 0) { break }  # Found extras from first group
+    }
+
     $header = 'Status,Priority,SourceDomain,SourceGroup,TargetDomain,TargetGroup,' +
               'SourceSam,SourceDisplayName,SourceEmail,' +
               'TargetSam,TargetDisplayName,CorrelationConfidence,Action,Notes'
+    if ($extraAttrNames.Count -gt 0) {
+        $header += ',' + (($extraAttrNames | ForEach-Object { "Source$_" }) -join ',')
+    }
 
     $rows = [System.Collections.Generic.List[string]]::new()
     $rows.Add($header)
@@ -682,20 +703,28 @@ function Export-GapAnalysisCsv {
         $srcUser    = if ($item.SourceUser) { $item.SourceUser } else { @{} }
         $tgtUser    = if ($item.TargetUser) { $item.TargetUser } else { @{} }
 
-        $row = (ConvertTo-CsvField -Value $item.Status),
-               (ConvertTo-CsvField -Value $item.Priority),
-               (ConvertTo-CsvField -Value $entry.SourceDomain),
-               (ConvertTo-CsvField -Value $entry.SourceGroup),
-               (ConvertTo-CsvField -Value $entry.TargetDomain),
-               (ConvertTo-CsvField -Value $entry.TargetGroup),
-               (ConvertTo-CsvField -Value $(if ($srcUser.SamAccountName) { $srcUser.SamAccountName } else { '' })),
-               (ConvertTo-CsvField -Value $(if ($srcUser.DisplayName)    { $srcUser.DisplayName }    else { '' })),
-               (ConvertTo-CsvField -Value $(if ($srcUser.Email)          { $srcUser.Email }          else { '' })),
-               (ConvertTo-CsvField -Value $(if ($tgtUser.SamAccountName) { $tgtUser.SamAccountName } else { '' })),
-               (ConvertTo-CsvField -Value $(if ($tgtUser.DisplayName)    { $tgtUser.DisplayName }    else { '' })),
-               (ConvertTo-CsvField -Value $(if ($item.CorrelationConfidence) { $item.CorrelationConfidence } else { '' })),
-               (ConvertTo-CsvField -Value $(if ($item.Action) { $item.Action } else { '' })),
-               (ConvertTo-CsvField -Value $(if ($item.Notes)  { $item.Notes }  else { '' }))
+        $row = @(
+            (ConvertTo-CsvField -Value $item.Status),
+            (ConvertTo-CsvField -Value $item.Priority),
+            (ConvertTo-CsvField -Value $entry.SourceDomain),
+            (ConvertTo-CsvField -Value $entry.SourceGroup),
+            (ConvertTo-CsvField -Value $entry.TargetDomain),
+            (ConvertTo-CsvField -Value $entry.TargetGroup),
+            (ConvertTo-CsvField -Value $(if ($srcUser.SamAccountName) { $srcUser.SamAccountName } else { '' })),
+            (ConvertTo-CsvField -Value $(if ($srcUser.DisplayName)    { $srcUser.DisplayName }    else { '' })),
+            (ConvertTo-CsvField -Value $(if ($srcUser.Email)          { $srcUser.Email }          else { '' })),
+            (ConvertTo-CsvField -Value $(if ($tgtUser.SamAccountName) { $tgtUser.SamAccountName } else { '' })),
+            (ConvertTo-CsvField -Value $(if ($tgtUser.DisplayName)    { $tgtUser.DisplayName }    else { '' })),
+            (ConvertTo-CsvField -Value $(if ($item.CorrelationConfidence) { $item.CorrelationConfidence } else { '' })),
+            (ConvertTo-CsvField -Value $(if ($item.Action) { $item.Action } else { '' })),
+            (ConvertTo-CsvField -Value $(if ($item.Notes)  { $item.Notes }  else { '' }))
+        )
+
+        # Append extra attribute columns
+        foreach ($attrName in $extraAttrNames) {
+            $attrVal = if ($srcUser -and $srcUser[$attrName]) { $srcUser[$attrName] } else { '' }
+            $row += (ConvertTo-CsvField -Value $attrVal)
+        }
 
         $rows.Add($row -join ',')
     }

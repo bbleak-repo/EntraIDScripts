@@ -314,7 +314,10 @@ function Get-GroupMembersDirect {
         [PSCredential]$Credential,
 
         [Parameter(Mandatory = $false)]
-        [hashtable]$Config = @{}
+        [hashtable]$Config = @{},
+
+        [Parameter(Mandatory = $false)]
+        [string[]]$IncludeAttributes = @()
     )
 
     $errors      = @()
@@ -332,6 +335,9 @@ function Get-GroupMembersDirect {
     $largeGroupThresh   = if ($Config.LargeGroupThreshold) { $Config.LargeGroupThreshold } else { 5000 }
     $skipGroupNames     = if ($Config.SkipGroups)          { $Config.SkipGroups }          else { @() }
     $allowInsecure      = if ($null -ne $Config.AllowInsecure)  { $Config.AllowInsecure }  else { $false }
+
+    # Normalize extra attributes to lowercase for consistent handling
+    $extraAttrs = @($IncludeAttributes | Where-Object { $_ } | ForEach-Object { $_.Trim() })
 
     # Check well-known skip list (case-insensitive)
     if ($skipGroupNames -contains $GroupName) {
@@ -532,6 +538,11 @@ function Get-GroupMembersDirect {
             $null = $memberSearcher.PropertiesToLoad.Add('userAccountControl')
             $null = $memberSearcher.PropertiesToLoad.Add('distinguishedName')
 
+            # Add any extra requested attributes
+            foreach ($attr in $extraAttrs) {
+                $null = $memberSearcher.PropertiesToLoad.Add($attr)
+            }
+
             try {
                 $memberResults = $memberSearcher.FindAll()
 
@@ -550,7 +561,7 @@ function Get-GroupMembersDirect {
                     # Bit 2 (0x0002) of userAccountControl = ACCOUNTDISABLE
                     $enabled = ($uac -band 2) -eq 0
 
-                    $members += @{
+                    $memberHash = @{
                         SamAccountName    = $sam
                         DisplayName       = $display
                         Email             = $mail
@@ -558,6 +569,55 @@ function Get-GroupMembersDirect {
                         Domain            = $Domain
                         DistinguishedName = $dn
                     }
+
+                    # Read extra attributes
+                    foreach ($attr in $extraAttrs) {
+                        $attrLower = $attr.ToLower()
+                        $attrVal = if ($mr.Properties[$attrLower].Count -gt 0) {
+                            $mr.Properties[$attrLower][0]
+                        } else { $null }
+
+                        # Special handling: manager attribute is a DN -- resolve to display name
+                        if ($attrLower -eq 'manager' -and $attrVal) {
+                            $managerDN = $attrVal
+                            $managerName = $null
+                            $mgrEntry = $null
+                            $mgrSearcher = $null
+                            $mgrResults = $null
+                            try {
+                                $mgrEntry = New-LdapDirectoryEntry -Domain $Domain -Port $ldapPort `
+                                    -Secure $ldapSecure -Credential $Credential -BaseDN $managerDN
+                                $mgrSearcher = New-Object System.DirectoryServices.DirectorySearcher($mgrEntry)
+                                $mgrSearcher.Filter = '(objectCategory=person)'
+                                $mgrSearcher.SearchScope = [System.DirectoryServices.SearchScope]::Base
+                                $null = $mgrSearcher.PropertiesToLoad.Add('displayName')
+                                $null = $mgrSearcher.PropertiesToLoad.Add('sAMAccountName')
+                                try {
+                                    $mgrResults = $mgrSearcher.FindAll()
+                                    if ($mgrResults -and $mgrResults.Count -gt 0) {
+                                        $mgrR = $mgrResults[0]
+                                        $mgrDisplay = if ($mgrR.Properties['displayName'].Count -gt 0) { $mgrR.Properties['displayName'][0] } else { $null }
+                                        $mgrSam = if ($mgrR.Properties['sAMAccountName'].Count -gt 0) { $mgrR.Properties['sAMAccountName'][0] } else { $null }
+                                        $managerName = if ($mgrDisplay) { $mgrDisplay } else { $mgrSam }
+                                    }
+                                } finally {
+                                    if ($mgrResults) { $mgrResults.Dispose() }
+                                }
+                            } catch {
+                                # Manager resolution failed -- store raw DN
+                            } finally {
+                                if ($mgrSearcher) { $mgrSearcher.Dispose() }
+                                if ($mgrEntry)    { $mgrEntry.Dispose() }
+                            }
+
+                            $memberHash['Manager']   = $(if ($managerName) { $managerName } else { $managerDN })
+                            $memberHash['ManagerDN'] = $managerDN
+                        } else {
+                            $memberHash[$attr] = $attrVal
+                        }
+                    }
+
+                    $members += $memberHash
                 } else {
                     # Member DN exists but objectCategory=person returned nothing.
                     # Could be a nested group, contact, or computer. Include as partial entry.
@@ -618,6 +678,10 @@ function Get-GroupMembers {
     .PARAMETER Config
         Configuration hashtable from New-GroupEnumConfig (or raw hashtable with same keys)
 
+    .PARAMETER IncludeAttributes
+        Optional array of extra LDAP attribute names to retrieve for each member.
+        The 'manager' attribute is automatically resolved from DN to display name.
+
     .OUTPUTS
         Hashtable: @{ Data = @{...}; Errors = @() }
     #>
@@ -634,7 +698,10 @@ function Get-GroupMembers {
         [PSCredential]$Credential,
 
         [Parameter(Mandatory = $false)]
-        [hashtable]$Config = @{}
+        [hashtable]$Config = @{},
+
+        [Parameter(Mandatory = $false)]
+        [string[]]$IncludeAttributes = @()
     )
 
     $errors = @()
@@ -655,7 +722,7 @@ function Get-GroupMembers {
 
     try {
         $raw = Get-GroupMembersDirect -Domain $Domain -GroupName $GroupName `
-            -Credential $Credential -Config $Config
+            -Credential $Credential -Config $Config -IncludeAttributes $IncludeAttributes
 
         if ($raw.Errors.Count -gt 0) {
             $errors += $raw.Errors
