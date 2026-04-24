@@ -159,7 +159,13 @@ param(
     [string]$TargetSearchBase,
 
     [Parameter(Mandatory = $false)]
-    [string[]]$IncludeAttributes = @()
+    [string[]]$IncludeAttributes = @(),
+
+    [Parameter(Mandatory = $false)]
+    [string]$BaselinePath,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PreviousRunPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -189,7 +195,8 @@ $moduleFiles = @(
     'AppMapping.ps1',
     'MigrationReportGenerator.ps1',
     'EmailSummary.ps1',
-    'DomainUserLookup.ps1'
+    'DomainUserLookup.ps1',
+    'MembershipDrift.ps1'
 )
 
 foreach ($moduleFile in $moduleFiles) {
@@ -959,6 +966,54 @@ try {
             } catch {
                 Write-Warning "Failed to export app readiness CSV: $_"
             }
+        }
+
+        Write-Host ''
+    }
+
+    # ---- Step 7: Membership Drift Detection ----
+    $driftResult = $null
+
+    $runDrift = ($BaselinePath -or $PreviousRunPath) -and $groupResults.Count -gt 0
+
+    if ($runDrift) {
+        Write-Host 'Detecting membership drift...' -ForegroundColor Cyan
+
+        # Auto-detect previous run if not specified
+        $resolvedPreviousPath = $PreviousRunPath
+        if (-not $resolvedPreviousPath -and -not $FromCache) {
+            $resolvedPreviousPath = Get-LatestCacheFile -CacheDirectory $cacheDir -ExcludePath $resolvedCachePath
+            if ($resolvedPreviousPath) {
+                Write-Host "  Auto-detected previous run: $resolvedPreviousPath" -ForegroundColor Gray
+            }
+        }
+
+        $driftResult = Get-MembershipDrift `
+            -CurrentGroupResults $groupResults `
+            -BaselinePath        $BaselinePath `
+            -PreviousRunPath     $resolvedPreviousPath
+
+        # Show summary
+        $blSummary = $driftResult.OverallSummary.BaselineComparison
+        $prSummary = $driftResult.OverallSummary.PreviousComparison
+
+        if ($BaselinePath -and $blSummary.GroupsCompared -gt 0) {
+            Write-Host "  vs Baseline: +$($blSummary.TotalAdded) added, -$($blSummary.TotalRemoved) removed across $($blSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($blSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
+        }
+        if ($resolvedPreviousPath -and $prSummary.GroupsCompared -gt 0) {
+            Write-Host "  vs Previous: +$($prSummary.TotalAdded) added, -$($prSummary.TotalRemoved) removed across $($prSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($prSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
+        }
+
+        # Export drift CSV
+        if ($driftResult.FromPrevious.Count -gt 0) {
+            $driftCsvPath = Join-Path $resolvedOutputDir "${csvLeaf}-drift-previous-${timestamp}.csv"
+            $null = Export-DriftReportCsv -DriftResult $driftResult -OutputPath $driftCsvPath -ComparisonType 'Previous'
+            Write-Host "  Drift CSV (vs previous): $driftCsvPath" -ForegroundColor Gray
+        }
+        if ($driftResult.FromBaseline.Count -gt 0 -and $BaselinePath) {
+            $driftBlCsvPath = Join-Path $resolvedOutputDir "${csvLeaf}-drift-baseline-${timestamp}.csv"
+            $null = Export-DriftReportCsv -DriftResult $driftResult -OutputPath $driftBlCsvPath -ComparisonType 'Baseline'
+            Write-Host "  Drift CSV (vs baseline): $driftBlCsvPath" -ForegroundColor Gray
         }
 
         Write-Host ''

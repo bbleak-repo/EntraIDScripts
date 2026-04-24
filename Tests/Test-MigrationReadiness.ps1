@@ -174,6 +174,7 @@ try {
     . (Join-Path $scriptRoot 'Modules\MigrationReportGenerator.ps1')
     . (Join-Path $scriptRoot 'Modules\EmailSummary.ps1')
     . (Join-Path $scriptRoot 'Modules\DomainUserLookup.ps1')
+    . (Join-Path $scriptRoot 'Modules\MembershipDrift.ps1')
     Write-Host '  All modules loaded successfully' -ForegroundColor Green
     Write-Host ''
 } catch {
@@ -1716,6 +1717,171 @@ try {
     Assert-True -Condition ($disabledBadge -match 'badge-skip') -Message 'DomainLookup: Skip-Disabled badge uses skip style'
 } catch {
     Assert-True -Condition $false -Message "DomainLookup: Skip badges threw: $_"
+}
+
+Write-Host ''
+
+# ============================================================================
+# CATEGORY 10: Membership Drift Detection Tests
+# ============================================================================
+
+Write-Host '==========================================' -ForegroundColor Cyan
+Write-Host 'Test Category 10: Membership Drift Tests' -ForegroundColor Cyan
+Write-Host '==========================================' -ForegroundColor Cyan
+
+# 10.1 Compare-GroupMembership detects added users
+try {
+    $baseline = @(
+        @{ SamAccountName = 'user1'; DisplayName = 'User One'; Email = 'u1@corp.com' }
+        @{ SamAccountName = 'user2'; DisplayName = 'User Two'; Email = 'u2@corp.com' }
+    )
+    $current = @(
+        @{ SamAccountName = 'user1'; DisplayName = 'User One'; Email = 'u1@corp.com' }
+        @{ SamAccountName = 'user2'; DisplayName = 'User Two'; Email = 'u2@corp.com' }
+        @{ SamAccountName = 'user3'; DisplayName = 'User Three'; Email = 'u3@corp.com' }
+    )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline -GroupName 'TestGroup' -Domain 'CORP'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.AddedCount -Message 'Drift: detects 1 added user'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.RemovedCount -Message 'Drift: no removed users'
+    Assert-Equal -Expected 2 -Actual $diff.Summary.UnchangedCount -Message 'Drift: 2 unchanged users'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.NetChange -Message 'Drift: net change is +1'
+} catch {
+    Assert-True -Condition $false -Message "Drift: added user detection threw: $_"
+}
+
+# 10.2 Compare-GroupMembership detects removed users
+try {
+    $baseline = @(
+        @{ SamAccountName = 'user1'; DisplayName = 'User One'; Email = 'u1@corp.com' }
+        @{ SamAccountName = 'user2'; DisplayName = 'User Two'; Email = 'u2@corp.com' }
+        @{ SamAccountName = 'user3'; DisplayName = 'User Three'; Email = 'u3@corp.com' }
+    )
+    $current = @(
+        @{ SamAccountName = 'user1'; DisplayName = 'User One'; Email = 'u1@corp.com' }
+        @{ SamAccountName = 'user3'; DisplayName = 'User Three'; Email = 'u3@corp.com' }
+    )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline
+    Assert-Equal -Expected 0 -Actual $diff.Summary.AddedCount -Message 'Drift: no added users in removal test'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.RemovedCount -Message 'Drift: detects 1 removed user'
+    Assert-Equal -Expected -1 -Actual $diff.Summary.NetChange -Message 'Drift: net change is -1'
+} catch {
+    Assert-True -Condition $false -Message "Drift: removed user detection threw: $_"
+}
+
+# 10.3 Compare-GroupMembership mixed add and remove
+try {
+    $baseline = @(
+        @{ SamAccountName = 'user1' }
+        @{ SamAccountName = 'user2' }
+        @{ SamAccountName = 'user3' }
+    )
+    $current = @(
+        @{ SamAccountName = 'user2' }
+        @{ SamAccountName = 'user3' }
+        @{ SamAccountName = 'user4' }
+        @{ SamAccountName = 'user5' }
+    )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline
+    Assert-Equal -Expected 2 -Actual $diff.Summary.AddedCount -Message 'Drift: 2 added in mixed scenario'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.RemovedCount -Message 'Drift: 1 removed in mixed scenario'
+    Assert-Equal -Expected 2 -Actual $diff.Summary.UnchangedCount -Message 'Drift: 2 unchanged in mixed scenario'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.NetChange -Message 'Drift: net +1 in mixed scenario'
+} catch {
+    Assert-True -Condition $false -Message "Drift: mixed add/remove threw: $_"
+}
+
+# 10.4 Compare-GroupMembership identical lists = no drift
+try {
+    $same = @(
+        @{ SamAccountName = 'user1' }
+        @{ SamAccountName = 'user2' }
+    )
+    $diff = Compare-GroupMembership -CurrentMembers $same -BaselineMembers $same
+    Assert-Equal -Expected 0 -Actual $diff.Summary.AddedCount -Message 'Drift: no drift on identical lists - added'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.RemovedCount -Message 'Drift: no drift on identical lists - removed'
+    Assert-Equal -Expected 2 -Actual $diff.Summary.UnchangedCount -Message 'Drift: all unchanged on identical lists'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.NetChange -Message 'Drift: zero net change on identical lists'
+} catch {
+    Assert-True -Condition $false -Message "Drift: identical lists threw: $_"
+}
+
+# 10.5 Compare-GroupMembership empty baseline = all added
+try {
+    $current = @( @{ SamAccountName = 'user1' }; @{ SamAccountName = 'user2' } )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers @()
+    Assert-Equal -Expected 2 -Actual $diff.Summary.AddedCount -Message 'Drift: empty baseline = all added'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.RemovedCount -Message 'Drift: empty baseline = none removed'
+} catch {
+    Assert-True -Condition $false -Message "Drift: empty baseline threw: $_"
+}
+
+# 10.6 Compare-GroupMembership empty current = all removed
+try {
+    $baseline = @( @{ SamAccountName = 'user1' }; @{ SamAccountName = 'user2' } )
+    $diff = Compare-GroupMembership -CurrentMembers @() -BaselineMembers $baseline
+    Assert-Equal -Expected 0 -Actual $diff.Summary.AddedCount -Message 'Drift: empty current = none added'
+    Assert-Equal -Expected 2 -Actual $diff.Summary.RemovedCount -Message 'Drift: empty current = all removed'
+} catch {
+    Assert-True -Condition $false -Message "Drift: empty current threw: $_"
+}
+
+# 10.7 Compare-GroupMembership is case-insensitive on SAM
+try {
+    $baseline = @( @{ SamAccountName = 'JSMITH' } )
+    $current  = @( @{ SamAccountName = 'jsmith' } )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline
+    Assert-Equal -Expected 0 -Actual $diff.Summary.AddedCount -Message 'Drift: case-insensitive SAM - no added'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.RemovedCount -Message 'Drift: case-insensitive SAM - no removed'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.UnchangedCount -Message 'Drift: case-insensitive SAM - unchanged'
+} catch {
+    Assert-True -Condition $false -Message "Drift: case-insensitive SAM threw: $_"
+}
+
+# 10.8 Added user details include SAM and DisplayName
+try {
+    $baseline = @()
+    $current  = @( @{ SamAccountName = 'newuser'; DisplayName = 'New Person'; Email = 'new@corp.com' } )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline
+    Assert-Equal -Expected 'newuser' -Actual $diff.Added[0].SamAccountName -Message 'Drift: added user SAM preserved'
+    Assert-Equal -Expected 'New Person' -Actual $diff.Added[0].DisplayName -Message 'Drift: added user DisplayName preserved'
+    Assert-Equal -Expected 'new@corp.com' -Actual $diff.Added[0].Email -Message 'Drift: added user Email preserved'
+} catch {
+    Assert-True -Condition $false -Message "Drift: added user details threw: $_"
+}
+
+# 10.9 Get-MembershipDrift with no baseline/previous returns empty results
+try {
+    $driftEmpty = Get-MembershipDrift -CurrentGroupResults @($script:MockCORPGroup) `
+        -BaselinePath '' -PreviousRunPath ''
+    Assert-NotNull -Value $driftEmpty -Message 'Drift: Get-MembershipDrift returns non-null'
+    Assert-Equal -Expected 0 -Actual $driftEmpty.FromBaseline.Count -Message 'Drift: no baseline = empty FromBaseline'
+    Assert-Equal -Expected 0 -Actual $driftEmpty.FromPrevious.Count -Message 'Drift: no previous = empty FromPrevious'
+} catch {
+    Assert-True -Condition $false -Message "Drift: empty baselines threw: $_"
+}
+
+# 10.10 Export-DriftReportCsv with actual drift data creates file
+try {
+    $driftForExport = @{
+        FromPrevious = @{
+            'CORP|TestGroup' = @{
+                Added = @( @{ SamAccountName = 'newguy'; DisplayName = 'New Guy'; Email = 'new@corp.com' } )
+                Removed = @( @{ SamAccountName = 'oldguy'; DisplayName = 'Old Guy'; Email = 'old@corp.com' } )
+                Unchanged = @()
+                Summary = @{ AddedCount = 1; RemovedCount = 1; UnchangedCount = 0; NetChange = 0 }
+            }
+        }
+        FromBaseline = @{}
+    }
+    $driftCsvPath = Join-Path $testOutputDir "drift-test-$(Get-Date -Format 'yyyyMMddHHmmss').csv"
+    $result = Export-DriftReportCsv -DriftResult $driftForExport -OutputPath $driftCsvPath -ComparisonType 'Previous'
+    Assert-True -Condition (Test-Path $driftCsvPath) -Message 'Drift: Export-DriftReportCsv creates file'
+    $content = [System.IO.File]::ReadAllText($driftCsvPath)
+    Assert-True -Condition ($content -match 'Added.*newguy') -Message 'Drift: CSV contains added user'
+    Assert-True -Condition ($content -match 'Removed.*oldguy') -Message 'Drift: CSV contains removed user'
+    Remove-Item $driftCsvPath -Force
+} catch {
+    Assert-True -Condition $false -Message "Drift: CSV export threw: $_"
 }
 
 Write-Host ''
