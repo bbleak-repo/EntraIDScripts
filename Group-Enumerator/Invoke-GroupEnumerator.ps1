@@ -206,7 +206,10 @@ function Show-Usage {
         ''
         'REQUIRED'
         '  -CsvPath <path>          CSV of groups to enumerate'
-        '                             columns: Domain,GroupName  OR  Group (DOMAIN\GroupName)'
+        '                             Format 1: headers Domain,GroupName  (e.g. CORP,Domain Admins)'
+        '                             Format 2: header  Group             (e.g. CORP\Domain Admins)'
+        '                             Samples:  Templates\groups-example-standard.csv'
+        '                                       Templates\groups-example-backslash.csv'
         ''
         'CONNECTIVITY'
         '  -Credential <pscred>     Pass explicit creds (default = current user via Kerberos)'
@@ -464,7 +467,17 @@ try {
         $groupList = Import-GroupList -CsvPath $CsvPath
 
         if (-not $groupList -or $groupList.Count -eq 0) {
-            Write-Warning 'No groups found in CSV. Nothing to enumerate.'
+            Write-Warning @"
+No groups found in CSV '$CsvPath'. Nothing to enumerate.
+
+Check that the file:
+  - has a header row (Domain,GroupName  OR  Group)
+  - has at least one non-blank data row
+  - uses DOMAIN\GroupName values if using the single-column 'Group' format
+
+Sample files: Templates\groups-example-standard.csv
+              Templates\groups-example-backslash.csv
+"@
             exit 0
         }
 

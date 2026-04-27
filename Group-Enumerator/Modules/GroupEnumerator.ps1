@@ -150,7 +150,27 @@ function Import-GroupList {
     $isBackslash  = ($headerLower -contains 'group') -and -not $isStandard
 
     if (-not $isStandard -and -not $isBackslash) {
-        throw "Unrecognised CSV format. Expected headers 'Domain,GroupName' or 'Group' (DOMAIN\GroupName values). Found: $($headers -join ', ')"
+        $msg = @(
+            "Unrecognised CSV format in '$CsvPath'."
+            "  Found headers: $($headers -join ', ')"
+            ''
+            '  Two formats are supported:'
+            ''
+            '  [1] Two-column format -- headers must be exactly: Domain,GroupName'
+            '      Domain,GroupName'
+            '      CORP,Domain Admins'
+            '      CORP,Enterprise Admins'
+            '      EUROPE,Helpdesk'
+            ''
+            '  [2] Single-column format -- header must be exactly: Group'
+            '      Group'
+            '      CORP\Domain Admins'
+            '      CORP\Enterprise Admins'
+            '      EUROPE\Helpdesk'
+            ''
+            '  Headers are case-insensitive. Sample files: Templates\groups-example-*.csv'
+        ) -join [Environment]::NewLine
+        throw $msg
     }
 
     $results = @()

@@ -75,19 +75,27 @@ See [QUICKSTART.md](docs/QUICKSTART.md) for detailed setup instructions, or run
 
 ## CSV Input Format
 
-**Standard format:**
+Two formats are supported; the header row is auto-detected (case-insensitive).
+Header names must match **exactly** -- `Groups` (plural) or other variants will be
+rejected with an error that lists the supported formats.
+
+**Format 1 -- two-column (`Domain,GroupName`):**
 ```csv
 Domain,GroupName
 CONTOSO,GG_IT_Admins
 FABRIKAM,USV_IT_Admins
 ```
 
-**Backslash format:**
+**Format 2 -- single-column (`Group`, values in `DOMAIN\GroupName`):**
 ```csv
 Group
 CONTOSO\GG_IT_Admins
 FABRIKAM\USV_IT_Admins
 ```
+
+Ready-to-copy sample files live in [`Templates/`](Templates/):
+- `groups-example-standard.csv`
+- `groups-example-backslash.csv`
 
 **Application mapping (optional):**
 ```csv

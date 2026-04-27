@@ -23,6 +23,8 @@ Group-Enumerator/
   Templates/
     group-report-template.html     # V1 dark/light HTML template
     migration-report-template.html # V2 migration dashboard template
+    groups-example-standard.csv    # Sample input CSV (Domain,GroupName format)
+    groups-example-backslash.csv   # Sample input CSV (Group / DOMAIN\GroupName format)
   Tests/
     Test-GroupEnumerator.ps1       # 141 v1 tests
     Test-MigrationReadiness.ps1    # 150 v2 tests

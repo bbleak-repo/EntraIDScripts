@@ -24,9 +24,11 @@ Get-Help .\Invoke-GroupEnumerator.ps1 -Detailed
 
 ## Step 1: Prepare Your CSV
 
-Create a CSV file listing the groups to enumerate. Use either format:
+Create a CSV file listing the groups to enumerate. Use either format.
+Header names must match **exactly** (case-insensitive) -- `Groups` (plural)
+or other variants will be rejected with an error that lists the supported formats.
 
-**Option A -- Two columns:**
+**Option A -- Two columns (`Domain,GroupName`):**
 ```csv
 Domain,GroupName
 CONTOSO,GG_IT_Admins
@@ -35,7 +37,7 @@ FABRIKAM,USV_IT_Admins
 FABRIKAM,USV_Finance_Users
 ```
 
-**Option B -- Backslash format:**
+**Option B -- Single column (`Group`, values in `DOMAIN\GroupName`):**
 ```csv
 Group
 CONTOSO\GG_IT_Admins
@@ -43,6 +45,10 @@ CONTOSO\GG_Finance_Users
 FABRIKAM\USV_IT_Admins
 FABRIKAM\USV_Finance_Users
 ```
+
+Ready-to-copy sample files live in [`../Templates/`](../Templates/):
+- `groups-example-standard.csv`
+- `groups-example-backslash.csv`
 
 ## Step 2: Basic Single-Domain Inventory (V1)
 
