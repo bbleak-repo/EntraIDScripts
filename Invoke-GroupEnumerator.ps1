@@ -14,6 +14,13 @@
     - Professional dark/light-theme HTML report
     - JSON cache for offline report regeneration with -FromCache
 
+    V2 features (enabled by switches):
+    - Nested group resolution to flat user lists (-ResolveNested)
+    - Stale/disabled account detection (-DetectStale)
+    - Cross-domain user correlation and gap analysis (-AnalyzeGaps)
+    - Application-level readiness from CSV mapping (-AppMappingCsv)
+    - SMTP delivery of migration readiness report (-SendEmail)
+
 .PARAMETER CsvPath
     Full path to the CSV file containing groups to enumerate.
     Supports Domain,GroupName column format or DOMAIN\GroupName single-column format.
@@ -50,6 +57,29 @@
 .PARAMETER NoCache
     Skip saving the JSON cache file after enumeration.
 
+.PARAMETER ResolveNested
+    Flatten nested group memberships to a single-level user list for each group.
+    Requires LDAPS connectivity to resolve child groups.
+
+.PARAMETER AnalyzeGaps
+    Run migration gap analysis against matched group pairs.
+    Implies user correlation. Requires -FuzzyMatch to have produced matched pairs.
+
+.PARAMETER DetectStale
+    Flag stale and disabled accounts in enumerated group membership.
+    Stale threshold is controlled by -StaleDays or config StaleAccountDays (default 90).
+
+.PARAMETER AppMappingCsv
+    Optional path to a CSV mapping Okta application names to AD group pairs.
+    Columns: AppName,SourceGroup,TargetGroup,Notes
+
+.PARAMETER SendEmail
+    Send the migration readiness summary email after report generation.
+    Requires Email section in config to be populated and Enabled = true.
+
+.PARAMETER StaleDays
+    Override the StaleAccountDays config value. 0 = use config value.
+
 .EXAMPLE
     .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch
 
@@ -58,6 +88,9 @@
 
 .EXAMPLE
     .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FromCache -CachePath .\Cache\groups-20260408.json
+
+.EXAMPLE
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -AnalyzeGaps -DetectStale -ResolveNested
 
 .NOTES
     Author: EntraID Team
@@ -99,7 +132,40 @@ param(
     [switch]$NoCache,
 
     [Parameter(Mandatory = $false)]
-    [switch]$AllowInsecure
+    [switch]$AllowInsecure,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$ResolveNested,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$AnalyzeGaps,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$DetectStale,
+
+    [Parameter(Mandatory = $false)]
+    [string]$AppMappingCsv,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$SendEmail,
+
+    [Parameter(Mandatory = $false)]
+    [int]$StaleDays = 0,
+
+    [Parameter(Mandatory = $false)]
+    [string]$MigratingTo,
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetSearchBase,
+
+    [Parameter(Mandatory = $false)]
+    [string[]]$IncludeAttributes = @(),
+
+    [Parameter(Mandatory = $false)]
+    [string]$BaselinePath,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PreviousRunPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -121,7 +187,16 @@ $moduleFiles = @(
     'GroupEnumLogger.ps1',
     'GroupEnumerator.ps1',
     'FuzzyMatcher.ps1',
-    'GroupReportGenerator.ps1'
+    'GroupReportGenerator.ps1',
+    'NestedGroupResolver.ps1',
+    'UserCorrelation.ps1',
+    'GapAnalysis.ps1',
+    'StaleAccountDetector.ps1',
+    'AppMapping.ps1',
+    'MigrationReportGenerator.ps1',
+    'EmailSummary.ps1',
+    'DomainUserLookup.ps1',
+    'MembershipDrift.ps1'
 )
 
 foreach ($moduleFile in $moduleFiles) {
@@ -156,6 +231,15 @@ try {
     }
     Write-Host ''
 
+    # ---- Resolve stale threshold (v2 -- before logging so it appears in context) ----
+    $staleDays = if ($StaleDays -gt 0) {
+        $StaleDays
+    } elseif ($config.StaleAccountDays) {
+        $config.StaleAccountDays
+    } else {
+        90
+    }
+
     # ---- Initialize logging ----
     $logState = Initialize-GroupEnumLog -Config $config -ScriptRoot $scriptRoot
     if ($logState.Enabled) {
@@ -168,10 +252,16 @@ try {
 
     Write-GroupEnumLog -Level 'INFO' -Operation 'Config' `
         -Message "Configuration loaded" -Context @{
-            configPath    = $ConfigPath
-            allowInsecure = $config.AllowInsecure
-            fuzzyMatch    = [bool]$FuzzyMatch
-            theme         = $Theme
+            configPath      = $ConfigPath
+            allowInsecure   = $config.AllowInsecure
+            fuzzyMatch      = [bool]$FuzzyMatch
+            theme           = $Theme
+            resolveNested   = [bool]$ResolveNested
+            analyzeGaps     = [bool]$AnalyzeGaps
+            detectStale     = [bool]$DetectStale
+            staleDays       = $staleDays
+            appMappingCsv   = $(if ($AppMappingCsv) { $AppMappingCsv } else { '' })
+            sendEmail       = [bool]$SendEmail
         }
 
     # ---- Resolve output directory ----
@@ -314,6 +404,9 @@ try {
                 if ($Credential) {
                     $enumParams.Credential = $Credential
                 }
+                if ($IncludeAttributes.Count -gt 0) {
+                    $enumParams.IncludeAttributes = $IncludeAttributes
+                }
 
                 $result = Get-GroupMembers @enumParams
 
@@ -414,17 +507,601 @@ try {
     }
 
     # =========================================================================
+    # V2: Migration Readiness Analysis (when -AnalyzeGaps or -ResolveNested)
+    # =========================================================================
+
+    # V2 result containers -- all null/empty by default so v1 path is unchanged
+    $staleResults       = $null
+    $correlationResults = @{}
+    $gapResults         = @()
+    $overallReadiness   = $null
+    $appReadiness       = $null
+    $gapCsvPath         = $null
+    $crSummaryPath      = $null
+    $crText             = ''
+
+    $runStale       = $DetectStale -or $AnalyzeGaps
+    $runCorrelation = $AnalyzeGaps -and $matchResults -and $matchResults.Matched.Count -gt 0
+    $runGaps        = $AnalyzeGaps -and $runCorrelation
+
+    # ---- Step 1: Nested Group Resolution ----
+    if ($ResolveNested) {
+        Write-Host 'Resolving nested group memberships...' -ForegroundColor Cyan
+
+        $nestedResolved   = 0
+        $nestedUsersTotal = 0
+
+        foreach ($groupResult in $groupResults) {
+            if ($groupResult.Data.Skipped -or $groupResult.Errors.Count -gt 0) { continue }
+
+            $nestedParams = @{
+                Domain    = $groupResult.Data.Domain
+                GroupName = $groupResult.Data.GroupName
+                Config    = $config
+            }
+            if ($Credential) { $nestedParams.Credential = $Credential }
+
+            try {
+                $flatResult = Resolve-NestedGroupMembers @nestedParams
+
+                if ($flatResult.FlatMembers.Count -gt 0) {
+                    $groupResult.Data.Members     = $flatResult.FlatMembers
+                    $groupResult.Data.MemberCount = $flatResult.TotalUsersFound
+                    $nestedResolved++
+                    $nestedUsersTotal += $flatResult.TotalUsersFound
+
+                    if ($flatResult.MaxDepthReached) {
+                        Write-Host "  $($groupResult.Data.Domain)\$($groupResult.Data.GroupName): $($flatResult.TotalUsersFound) users [max depth reached]" -ForegroundColor Yellow
+                    }
+                }
+
+                if ($flatResult.Errors -and $flatResult.Errors.Count -gt 0) {
+                    foreach ($e in $flatResult.Errors) {
+                        Write-GroupEnumLog -Level 'WARN' -Operation 'NestedResolve' `
+                            -Message "Nested resolve error for $($groupResult.Data.Domain)\$($groupResult.Data.GroupName): $e" `
+                            -Context @{ domain = $groupResult.Data.Domain; groupName = $groupResult.Data.GroupName }
+                    }
+                }
+            } catch {
+                Write-Warning "Nested resolution failed for $($groupResult.Data.Domain)\$($groupResult.Data.GroupName): $_"
+                Write-GroupEnumLog -Level 'ERROR' -Operation 'NestedResolve' `
+                    -Message "Nested resolution failed: $_" `
+                    -Context @{ domain = $groupResult.Data.Domain; groupName = $groupResult.Data.GroupName; error = $_.ToString() }
+            }
+        }
+
+        Write-Host "  Resolved $nestedResolved group(s) -- $nestedUsersTotal total flat members" -ForegroundColor Gray
+        Write-Host ''
+
+        Write-GroupEnumLog -Level 'INFO' -Operation 'NestedResolve' `
+            -Message "Nested group resolution complete: $nestedResolved groups, $nestedUsersTotal total users" `
+            -Context @{ groupsResolved = $nestedResolved; totalUsers = $nestedUsersTotal }
+    }
+
+    # ---- Step 2: Stale Account Detection ----
+    if ($runStale) {
+        Write-Host 'Detecting stale and disabled accounts...' -ForegroundColor Cyan
+
+        $staleResults   = @{}
+        $staleTotalFlag = 0
+
+        foreach ($groupResult in $groupResults) {
+            if ($groupResult.Data.Skipped -or $groupResult.Errors.Count -gt 0) { continue }
+            if (-not $groupResult.Data.Members -or $groupResult.Data.Members.Count -eq 0) { continue }
+
+            $staleKey = "$($groupResult.Data.Domain)|$($groupResult.Data.GroupName)"
+
+            # Pass a copy of config with the resolved stale threshold
+            $staleConfig = $config.Clone()
+            $staleConfig.StaleAccountDays = $staleDays
+
+            $staleParams = @{
+                Members = $groupResult.Data.Members
+                Domain  = $groupResult.Data.Domain
+                Config  = $staleConfig
+            }
+            if ($Credential) { $staleParams.Credential = $Credential }
+
+            try {
+                $staleResult = Get-AccountStaleness @staleParams
+                $staleResults[$staleKey] = $staleResult
+
+                $flagged = $staleResult.Summary.DisabledCount + $staleResult.Summary.StaleCount + $staleResult.Summary.NeverLoggedInCount
+                $staleTotalFlag += $flagged
+
+                Write-GroupEnumLog -Level 'DEBUG' -Operation 'StaleDetect' `
+                    -Message "Staleness check: $($groupResult.Data.Domain)\$($groupResult.Data.GroupName)" `
+                    -Context @{
+                        domain    = $groupResult.Data.Domain
+                        groupName = $groupResult.Data.GroupName
+                        active    = $staleResult.Summary.ActiveCount
+                        disabled  = $staleResult.Summary.DisabledCount
+                        stale     = $staleResult.Summary.StaleCount
+                        never     = $staleResult.Summary.NeverLoggedInCount
+                    }
+            } catch {
+                Write-Warning "Stale detection failed for $($groupResult.Data.Domain)\$($groupResult.Data.GroupName): $_"
+                Write-GroupEnumLog -Level 'ERROR' -Operation 'StaleDetect' `
+                    -Message "Stale detection failed: $_" `
+                    -Context @{ domain = $groupResult.Data.Domain; groupName = $groupResult.Data.GroupName; error = $_.ToString() }
+            }
+        }
+
+        Write-Host "  $staleTotalFlag stale/disabled account(s) flagged across $($staleResults.Count) group(s)" -ForegroundColor Gray
+        Write-Host ''
+
+        Write-GroupEnumLog -Level 'INFO' -Operation 'StaleDetect' `
+            -Message "Stale account detection complete: $staleTotalFlag accounts flagged" `
+            -Context @{ totalFlagged = $staleTotalFlag; groupsChecked = $staleResults.Count }
+    }
+
+    # ---- Step 3: User Correlation ----
+    if ($runCorrelation) {
+        Write-Host 'Running cross-domain user correlation...' -ForegroundColor Cyan
+
+        $totalCorrelated   = 0
+        $totalHighConf     = 0
+        $totalMediumConf   = 0
+        $totalLowConf      = 0
+
+        # Build a lookup of GroupName -> group result for member access
+        $groupResultByKey = @{}
+        foreach ($gr in $groupResults) {
+            $k = "$($gr.Data.Domain)|$($gr.Data.GroupName)"
+            $groupResultByKey[$k] = $gr
+        }
+
+        foreach ($pair in $matchResults.Matched) {
+            $srcKey = "$($pair.SourceDomain)|$($pair.SourceGroup)"
+            $tgtKey = "$($pair.TargetDomain)|$($pair.TargetGroup)"
+
+            $srcResult = $groupResultByKey[$srcKey]
+            $tgtResult = $groupResultByKey[$tgtKey]
+
+            if (-not $srcResult -or -not $tgtResult) { continue }
+
+            $srcMembers = if ($srcResult.Data.Members) { @($srcResult.Data.Members) } else { @() }
+            $tgtMembers = if ($tgtResult.Data.Members) { @($tgtResult.Data.Members) } else { @() }
+
+            $corrKey = "$($pair.SourceDomain)\$($pair.SourceGroup)|$($pair.TargetDomain)\$($pair.TargetGroup)"
+
+            $corrParams = @{
+                SourceMembers  = $srcMembers
+                TargetMembers  = $tgtMembers
+                Config         = $config
+            }
+
+            try {
+                $corrResult = Find-UserCorrelations @corrParams
+                $correlationResults[$corrKey] = $corrResult
+
+                $totalCorrelated += $corrResult.Summary.CorrelatedCount
+                $totalHighConf   += $corrResult.Summary.HighConfidence
+                $totalMediumConf += $corrResult.Summary.MediumConfidence
+                $totalLowConf    += $corrResult.Summary.LowConfidence
+
+            } catch {
+                Write-Warning "User correlation failed for pair $corrKey: $_"
+                Write-GroupEnumLog -Level 'ERROR' -Operation 'UserCorrelation' `
+                    -Message "User correlation failed for pair $corrKey: $_" `
+                    -Context @{ corrKey = $corrKey; error = $_.ToString() }
+            }
+        }
+
+        Write-Host "  $totalCorrelated correlation(s) found: High=$totalHighConf, Medium=$totalMediumConf, Low=$totalLowConf" -ForegroundColor Gray
+        Write-Host ''
+
+        Write-GroupEnumLog -Level 'INFO' -Operation 'UserCorrelation' `
+            -Message "User correlation complete across $($correlationResults.Count) group pair(s)" `
+            -Context @{
+                pairs         = $correlationResults.Count
+                correlated    = $totalCorrelated
+                highConf      = $totalHighConf
+                mediumConf    = $totalMediumConf
+                lowConf       = $totalLowConf
+            }
+    }
+
+    # ---- Step 4: Gap Analysis ----
+    if ($runGaps) {
+        Write-Host 'Running migration gap analysis...' -ForegroundColor Cyan
+
+        $groupResultByKey = @{}
+        foreach ($gr in $groupResults) {
+            $k = "$($gr.Data.Domain)|$($gr.Data.GroupName)"
+            $groupResultByKey[$k] = $gr
+        }
+
+        foreach ($pair in $matchResults.Matched) {
+            $corrKey = "$($pair.SourceDomain)\$($pair.SourceGroup)|$($pair.TargetDomain)\$($pair.TargetGroup)"
+
+            if (-not $correlationResults.ContainsKey($corrKey)) { continue }
+
+            $srcKey = "$($pair.SourceDomain)|$($pair.SourceGroup)"
+            $tgtKey = "$($pair.TargetDomain)|$($pair.TargetGroup)"
+
+            $srcResult = $groupResultByKey[$srcKey]
+            $tgtResult = $groupResultByKey[$tgtKey]
+
+            if (-not $srcResult -or -not $tgtResult) { continue }
+
+            $corrResult = $correlationResults[$corrKey]
+
+            # Stale data for this source group (keyed by Domain|GroupName)
+            $srcStaleKey   = "$($pair.SourceDomain)|$($pair.SourceGroup)"
+            $staleForGroup = if ($staleResults -and $staleResults.ContainsKey($srcStaleKey)) {
+                $staleResults[$srcStaleKey]
+            } else { $null }
+
+            $gapParams = @{
+                SourceGroupResult = $srcResult
+                TargetGroupResult = $tgtResult
+                CorrelationResult = $corrResult
+                StaleResult       = $staleForGroup
+                Config            = $config
+            }
+
+            try {
+                $gapResult   = Get-MigrationGapAnalysis @gapParams
+                $gapResults += $gapResult
+            } catch {
+                Write-Warning "Gap analysis failed for pair $corrKey: $_"
+                Write-GroupEnumLog -Level 'ERROR' -Operation 'GapAnalysis' `
+                    -Message "Gap analysis failed for pair $corrKey: $_" `
+                    -Context @{ corrKey = $corrKey; error = $_.ToString() }
+            }
+        }
+
+        # Overall readiness summary
+        if ($gapResults.Count -gt 0) {
+            $appReadinessForOverall = $null
+
+            $overallReadiness = Get-OverallMigrationReadiness -GapResults $gapResults `
+                -AppReadiness $appReadinessForOverall
+
+            Write-Host "  Overall readiness: $($overallReadiness.OverallPercent)% -- $($overallReadiness.TotalCRItems) CR item(s) across $($gapResults.Count) group pair(s)" -ForegroundColor Gray
+        } else {
+            Write-Host '  No gap results generated (no matched pairs with correlations)' -ForegroundColor Yellow
+        }
+
+        Write-Host ''
+
+        Write-GroupEnumLog -Level 'INFO' -Operation 'GapAnalysis' `
+            -Message "Gap analysis complete: $($gapResults.Count) group pairs analyzed" `
+            -Context @{
+                pairsAnalyzed    = $gapResults.Count
+                overallPercent   = $(if ($overallReadiness) { $overallReadiness.OverallPercent } else { 0 })
+                totalCRItems     = $(if ($overallReadiness) { $overallReadiness.TotalCRItems }   else { 0 })
+            }
+    }
+
+    # ---- Step 4b: Domain Existence Resolution (-MigratingTo) ----
+    if ($MigratingTo -and $gapResults.Count -gt 0) {
+        Write-Host "Resolving domain existence in '$MigratingTo'..." -ForegroundColor Cyan
+
+        # Determine SearchBase: explicit param > auto-detect > domain root
+        $resolvedSearchBase = $TargetSearchBase
+
+        if (-not $resolvedSearchBase) {
+            # Try to detect the current user's OU as a suggestion
+            Write-Host '  No -TargetSearchBase provided. Detecting current user OU...' -ForegroundColor Gray
+            $ouDetect = Get-CurrentUserOU -Domain $MigratingTo -Credential $Credential -Config $config
+
+            if ($ouDetect.Detected -and $ouDetect.ParentOU) {
+                Write-Host "  Detected your OU: $($ouDetect.ParentOU)" -ForegroundColor Cyan
+                $useDetected = Read-Host "  Use this OU as SearchBase? [Y/n]"
+                if (-not $useDetected -or $useDetected -imatch '^y') {
+                    $resolvedSearchBase = $ouDetect.ParentOU
+                    Write-Host "  Using detected OU: $resolvedSearchBase" -ForegroundColor Green
+                } else {
+                    Write-Host '  Searching from domain root (may be slower for large domains)' -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "  Could not detect user OU: $($ouDetect.Error)" -ForegroundColor Yellow
+                Write-Host '  Searching from domain root' -ForegroundColor Yellow
+            }
+
+            Write-GroupEnumLog -Level 'INFO' -Operation 'SearchBaseDetect' `
+                -Message "SearchBase detection: $(if ($resolvedSearchBase) { $resolvedSearchBase } else { 'domain root' })" `
+                -Context @{
+                    detected  = $ouDetect.Detected
+                    parentOU  = $ouDetect.ParentOU
+                    userDN    = $ouDetect.UserDN
+                    resolved  = $(if ($resolvedSearchBase) { $resolvedSearchBase } else { '(domain root)' })
+                }
+        }
+
+        # Validate SearchBase if one is set
+        if ($resolvedSearchBase) {
+            Write-Host "  Validating SearchBase: $resolvedSearchBase" -ForegroundColor Gray
+            $sbCheck = Test-SearchBaseExists -Domain $MigratingTo -SearchBase $resolvedSearchBase `
+                -Credential $Credential -Config $config
+
+            if (-not $sbCheck.Exists) {
+                Write-Host "  SearchBase NOT FOUND: $resolvedSearchBase" -ForegroundColor Red
+                if ($sbCheck.Error) {
+                    Write-Host "  Error: $($sbCheck.Error)" -ForegroundColor Red
+                }
+                $continueChoice = Read-Host '  SearchBase not found. Continue searching from domain root instead? [Y/n]'
+                if (-not $continueChoice -or $continueChoice -imatch '^y') {
+                    Write-Host '  Continuing with domain root search' -ForegroundColor Yellow
+                    $resolvedSearchBase = $null
+                } else {
+                    Write-Host '  Skipping domain existence resolution' -ForegroundColor Yellow
+                    $resolvedSearchBase = $null
+                    $MigratingTo = $null  # Skip the resolution
+                }
+
+                Write-GroupEnumLog -Level 'WARN' -Operation 'SearchBaseValidation' `
+                    -Message "SearchBase '$($sbCheck.DN)' not found: $($sbCheck.Error)" `
+                    -Context @{ searchBase = $sbCheck.DN; error = $sbCheck.Error }
+            } else {
+                Write-Host "  SearchBase validated successfully" -ForegroundColor Green
+            }
+        }
+
+        # Run domain existence resolution
+        if ($MigratingTo) {
+            $notProvCount = ($gapResults | ForEach-Object { $_.Items } |
+                Where-Object { $_.Status -eq 'NotProvisioned' }).Count
+
+            if ($notProvCount -gt 0) {
+                Write-Host "  Searching target domain for $notProvCount unmatched user(s)..." -ForegroundColor Gray
+
+                $gapResults = Resolve-DomainExistence `
+                    -GapResults       $gapResults `
+                    -TargetDomain     $MigratingTo `
+                    -TargetSearchBase $resolvedSearchBase `
+                    -Credential       $Credential `
+                    -Config           $config
+
+                # Count reclassifications
+                $existsCount = ($gapResults | ForEach-Object { $_.Items } |
+                    Where-Object { $_.Status -eq 'ExistsNotInGroup' }).Count
+                $notInDomCount = ($gapResults | ForEach-Object { $_.Items } |
+                    Where-Object { $_.Status -eq 'NotInDomain' }).Count
+
+                Write-Host "  Results: $existsCount exist in domain (need group add), $notInDomCount not in domain (need provisioning)" -ForegroundColor Gray
+
+                # Recalculate overall readiness with updated gap results
+                $overallReadiness = Get-OverallMigrationReadiness -GapResults $gapResults `
+                    -AppReadiness $null
+                Write-Host "  Updated readiness: $($overallReadiness.OverallPercent)%" -ForegroundColor Gray
+            } else {
+                Write-Host '  No NotProvisioned users to search for' -ForegroundColor Gray
+            }
+
+            Write-Host ''
+        }
+    }
+
+    # ---- Step 5: App Mapping ----
+    if ($AppMappingCsv) {
+        Write-Host "Loading application mapping from: $AppMappingCsv" -ForegroundColor Cyan
+
+        try {
+            $appMappings = Import-AppMapping -CsvPath $AppMappingCsv
+
+            if ($appMappings.Count -gt 0 -and $gapResults.Count -gt 0) {
+                $appReadiness = Get-AppReadiness -AppMappings $appMappings -GapResults $gapResults
+
+                Write-Host "  $($appReadiness.Summary.TotalApps) app(s): $($appReadiness.Summary.ReadyApps) ready, $($appReadiness.Summary.InProgressApps) in progress, $($appReadiness.Summary.BlockedApps) blocked" -ForegroundColor Gray
+
+                Write-GroupEnumLog -Level 'INFO' -Operation 'AppMapping' `
+                    -Message "App readiness calculated for $($appReadiness.Summary.TotalApps) application(s)" `
+                    -Context @{
+                        totalApps      = $appReadiness.Summary.TotalApps
+                        readyApps      = $appReadiness.Summary.ReadyApps
+                        inProgressApps = $appReadiness.Summary.InProgressApps
+                        blockedApps    = $appReadiness.Summary.BlockedApps
+                        notAnalyzed    = $appReadiness.Summary.NotAnalyzedApps
+                    }
+            } elseif ($appMappings.Count -gt 0) {
+                Write-Host '  App mappings loaded but no gap results available -- skipping app readiness calculation' -ForegroundColor Yellow
+                Write-GroupEnumLog -Level 'WARN' -Operation 'AppMapping' `
+                    -Message 'App mappings loaded but no gap results available for readiness calculation'
+            }
+        } catch {
+            Write-Warning "App mapping failed: $_"
+            Write-GroupEnumLog -Level 'ERROR' -Operation 'AppMapping' `
+                -Message "App mapping failed: $_" -Context @{ error = $_.ToString() }
+        }
+
+        Write-Host ''
+    }
+
+    # ---- Step 6: Export Gap Analysis CSV and CR Summary ----
+    if ($AnalyzeGaps -and $gapResults.Count -gt 0) {
+        Write-Host 'Exporting gap analysis artefacts...' -ForegroundColor Cyan
+
+        $gapCsvFileName = "${csvLeaf}-gaps-${timestamp}.csv"
+        $gapCsvPath     = Join-Path $resolvedOutputDir $gapCsvFileName
+
+        try {
+            $null = Export-GapAnalysisCsv -GapResults $gapResults -OutputPath $gapCsvPath
+            Write-Host "  Gap analysis CSV: $gapCsvPath" -ForegroundColor Gray
+
+            Write-GroupEnumLog -Level 'INFO' -Operation 'ExportCsv' `
+                -Message "Gap analysis CSV exported" -Context @{ path = $gapCsvPath }
+        } catch {
+            Write-Warning "Failed to export gap analysis CSV: $_"
+            Write-GroupEnumLog -Level 'ERROR' -Operation 'ExportCsv' `
+                -Message "Gap analysis CSV export failed: $_" -Context @{ error = $_.ToString() }
+        }
+
+        if ($overallReadiness) {
+            $crSummaryFileName = "${csvLeaf}-cr-summary-${timestamp}.txt"
+            $crSummaryPath     = Join-Path $resolvedOutputDir $crSummaryFileName
+
+            try {
+                $crText = Export-ChangeRequestSummary -GapResults $gapResults `
+                    -OverallReadiness $overallReadiness
+
+                [System.IO.File]::WriteAllText(
+                    $crSummaryPath,
+                    $crText,
+                    [System.Text.UTF8Encoding]::new($false)
+                )
+                Write-Host "  CR summary: $crSummaryPath" -ForegroundColor Gray
+
+                Write-GroupEnumLog -Level 'INFO' -Operation 'ExportCR' `
+                    -Message "CR summary exported" -Context @{ path = $crSummaryPath }
+            } catch {
+                Write-Warning "Failed to export CR summary: $_"
+                Write-GroupEnumLog -Level 'ERROR' -Operation 'ExportCR' `
+                    -Message "CR summary export failed: $_" -Context @{ error = $_.ToString() }
+                $crText = ''
+            }
+        }
+
+        # Export app readiness CSV if app mapping was provided
+        if ($appReadiness -and $appReadiness.Apps.Count -gt 0) {
+            $appCsvFileName = "${csvLeaf}-app-readiness-${timestamp}.csv"
+            $appCsvPath     = Join-Path $resolvedOutputDir $appCsvFileName
+            try {
+                $null = Export-AppReadinessCsv -AppReadiness $appReadiness -OutputPath $appCsvPath
+                Write-Host "  App readiness CSV: $appCsvPath" -ForegroundColor Gray
+                Write-GroupEnumLog -Level 'INFO' -Operation 'ExportCsv' `
+                    -Message "App readiness CSV exported" -Context @{ path = $appCsvPath }
+            } catch {
+                Write-Warning "Failed to export app readiness CSV: $_"
+            }
+        }
+
+        Write-Host ''
+    }
+
+    # ---- Step 7: Membership Drift Detection ----
+    $driftResult = $null
+
+    $runDrift = ($BaselinePath -or $PreviousRunPath) -and $groupResults.Count -gt 0
+
+    if ($runDrift) {
+        Write-Host 'Detecting membership drift...' -ForegroundColor Cyan
+
+        # Auto-detect previous run if not specified
+        $resolvedPreviousPath = $PreviousRunPath
+        if (-not $resolvedPreviousPath -and -not $FromCache) {
+            $resolvedPreviousPath = Get-LatestCacheFile -CacheDirectory $cacheDir -ExcludePath $resolvedCachePath
+            if ($resolvedPreviousPath) {
+                Write-Host "  Auto-detected previous run: $resolvedPreviousPath" -ForegroundColor Gray
+            }
+        }
+
+        $driftResult = Get-MembershipDrift `
+            -CurrentGroupResults $groupResults `
+            -BaselinePath        $BaselinePath `
+            -PreviousRunPath     $resolvedPreviousPath
+
+        # Show summary
+        $blSummary = $driftResult.OverallSummary.BaselineComparison
+        $prSummary = $driftResult.OverallSummary.PreviousComparison
+
+        if ($BaselinePath -and $blSummary.GroupsCompared -gt 0) {
+            Write-Host "  vs Baseline: +$($blSummary.TotalAdded) added, -$($blSummary.TotalRemoved) removed across $($blSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($blSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
+        }
+        if ($resolvedPreviousPath -and $prSummary.GroupsCompared -gt 0) {
+            Write-Host "  vs Previous: +$($prSummary.TotalAdded) added, -$($prSummary.TotalRemoved) removed across $($prSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($prSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
+        }
+
+        # Export drift CSV
+        if ($driftResult.FromPrevious.Count -gt 0) {
+            $driftCsvPath = Join-Path $resolvedOutputDir "${csvLeaf}-drift-previous-${timestamp}.csv"
+            $null = Export-DriftReportCsv -DriftResult $driftResult -OutputPath $driftCsvPath -ComparisonType 'Previous'
+            Write-Host "  Drift CSV (vs previous): $driftCsvPath" -ForegroundColor Gray
+        }
+        if ($driftResult.FromBaseline.Count -gt 0 -and $BaselinePath) {
+            $driftBlCsvPath = Join-Path $resolvedOutputDir "${csvLeaf}-drift-baseline-${timestamp}.csv"
+            $null = Export-DriftReportCsv -DriftResult $driftResult -OutputPath $driftBlCsvPath -ComparisonType 'Baseline'
+            Write-Host "  Drift CSV (vs baseline): $driftBlCsvPath" -ForegroundColor Gray
+        }
+
+        Write-Host ''
+    }
+
+    # =========================================================================
     # Report generation (both branches converge here)
     # =========================================================================
     if (-not $JsonOnly) {
         Write-Host "Generating HTML report: $resolvedHtmlPath" -ForegroundColor Cyan
-        $null = Export-GroupReport `
-            -GroupResults $groupResults `
-            -MatchResults $matchResults `
-            -OutputPath   $resolvedHtmlPath `
-            -Theme        $Theme `
-            -Config       $config
+
+        if ($AnalyzeGaps -and $gapResults.Count -gt 0) {
+            # V2: migration readiness report
+            $null = Export-MigrationReport `
+                -GroupResults      $groupResults `
+                -MatchResults      $matchResults `
+                -GapResults        $gapResults `
+                -OverallReadiness  $overallReadiness `
+                -CorrelationResults $correlationResults `
+                -StaleResults      $staleResults `
+                -AppReadiness      $appReadiness `
+                -OutputPath        $resolvedHtmlPath `
+                -Theme             $Theme `
+                -Config            $config
+        } else {
+            # V1: standard group comparison report
+            $null = Export-GroupReport `
+                -GroupResults $groupResults `
+                -MatchResults $matchResults `
+                -OutputPath   $resolvedHtmlPath `
+                -Theme        $Theme `
+                -Config       $config
+        }
+
         Write-Host "  Report: $resolvedHtmlPath" -ForegroundColor Gray
+        Write-Host ''
+    }
+
+    # ---- Email (if -SendEmail) ----
+    if ($SendEmail) {
+        Write-Host 'Sending migration summary email...' -ForegroundColor Cyan
+
+        $emailOverallReadiness = if ($overallReadiness) {
+            $overallReadiness
+        } else {
+            # Supply empty readiness so Send-MigrationSummaryEmail can build a minimal subject
+            @{
+                OverallPercent   = 0
+                GroupCount       = $groupResults.Count
+                ReadyGroups      = 0
+                InProgressGroups = 0
+                BlockedGroups    = 0
+                TotalCRItems     = 0
+                CRByPriority     = @{ P1 = 0; P2 = 0; P3 = 0 }
+            }
+        }
+
+        $emailParams = @{
+            HtmlReportPath   = $resolvedHtmlPath
+            Config           = $config
+            OverallReadiness = $emailOverallReadiness
+            CRSummaryText    = $crText
+        }
+        if ($Credential) { $emailParams.Credential = $Credential }
+
+        try {
+            $emailResult = Send-MigrationSummaryEmail @emailParams
+
+            if ($emailResult.Sent) {
+                Write-Host "  Email sent to: $($emailResult.Recipients -join ', ')" -ForegroundColor Gray
+                Write-GroupEnumLog -Level 'INFO' -Operation 'Email' `
+                    -Message "Migration summary email sent" `
+                    -Context @{
+                        recipients = ($emailResult.Recipients -join ', ')
+                        subject    = $emailResult.Subject
+                    }
+            } else {
+                Write-Warning "Email send failed: $($emailResult.Error)"
+                Write-GroupEnumLog -Level 'WARN' -Operation 'Email' `
+                    -Message "Email send failed: $($emailResult.Error)" `
+                    -Context @{ error = $emailResult.Error }
+            }
+        } catch {
+            Write-Warning "Email delivery error: $_"
+            Write-GroupEnumLog -Level 'ERROR' -Operation 'Email' `
+                -Message "Email delivery error: $_" -Context @{ error = $_.ToString() }
+        }
+
         Write-Host ''
     }
 
@@ -451,21 +1128,59 @@ try {
         Write-Host "  Unmatched groups : $($matchResults.Unmatched.Count)" -ForegroundColor White
     }
 
+    # V2 summary lines
+    if ($ResolveNested) {
+        $nestedCount = @($groupResults | Where-Object { -not $_.Data.Skipped }).Count
+        Write-Host "  Nested resolved  : $nestedCount group(s)" -ForegroundColor White
+    }
+
+    if ($runStale -and $staleResults) {
+        $totalFlagged = 0
+        foreach ($sr in $staleResults.Values) {
+            $totalFlagged += $sr.Summary.DisabledCount + $sr.Summary.StaleCount + $sr.Summary.NeverLoggedInCount
+        }
+        Write-Host "  Stale flagged    : $totalFlagged account(s)" -ForegroundColor $(if ($totalFlagged -gt 0) { 'Yellow' } else { 'White' })
+    }
+
+    if ($runCorrelation -and $correlationResults.Count -gt 0) {
+        Write-Host "  Correlations     : $totalCorrelated (High=$totalHighConf Medium=$totalMediumConf Low=$totalLowConf)" -ForegroundColor White
+    }
+
+    if ($overallReadiness) {
+        Write-Host "  Readiness        : $($overallReadiness.OverallPercent)%" -ForegroundColor $(
+            if ($overallReadiness.OverallPercent -ge 80) { 'Green' }
+            elseif ($overallReadiness.OverallPercent -ge 50) { 'Yellow' }
+            else { 'Red' }
+        )
+        $p1 = $overallReadiness.CRByPriority.P1
+        $p2 = $overallReadiness.CRByPriority.P2
+        $p3 = $overallReadiness.CRByPriority.P3
+        Write-Host "  Change Requests  : $($overallReadiness.TotalCRItems) total (P1=$p1 P2=$p2 P3=$p3)" -ForegroundColor White
+    }
+
     if (-not $JsonOnly) {
         Write-Host "  HTML report      : $resolvedHtmlPath" -ForegroundColor Cyan
     }
     if (-not $NoCache -and -not $FromCache) {
         Write-Host "  JSON cache       : $resolvedCachePath" -ForegroundColor Cyan
     }
+    if ($gapCsvPath) {
+        Write-Host "  Gap analysis CSV : $gapCsvPath" -ForegroundColor Cyan
+    }
+    if ($crSummaryPath) {
+        Write-Host "  CR summary       : $crSummaryPath" -ForegroundColor Cyan
+    }
 
     # Close logger and show path
     $logPath = Close-GroupEnumLog -Summary @{
-        groupsProcessed = $groupResults.Count
-        enumerated      = $enumerated.Count
-        skipped         = $skippedFinal.Count
-        totalMembers    = $totalMembers
-        errorGroups     = $errGroups.Count
-        matchedPairs    = if ($matchResults) { $matchResults.Matched.Count } else { 0 }
+        groupsProcessed  = $groupResults.Count
+        enumerated       = $enumerated.Count
+        skipped          = $skippedFinal.Count
+        totalMembers     = $totalMembers
+        errorGroups      = $errGroups.Count
+        matchedPairs     = if ($matchResults) { $matchResults.Matched.Count } else { 0 }
+        overallReadiness = if ($overallReadiness) { $overallReadiness.OverallPercent } else { $null }
+        totalCRItems     = if ($overallReadiness) { $overallReadiness.TotalCRItems }   else { 0 }
     }
     if ($logPath) {
         Write-Host "  Log file         : $logPath" -ForegroundColor Cyan
@@ -486,11 +1201,18 @@ try {
 
     # Return results object for pipeline use
     $pipelineResult = @{
-        GroupResults = $groupResults
-        MatchResults = $matchResults
-        Config       = $config
-        OutputPath   = if (-not $JsonOnly) { $resolvedHtmlPath } else { $null }
-        CachePath    = if (-not $NoCache -and -not $FromCache) { $resolvedCachePath } else { $null }
+        GroupResults        = $groupResults
+        MatchResults        = $matchResults
+        Config              = $config
+        OutputPath          = if (-not $JsonOnly) { $resolvedHtmlPath } else { $null }
+        CachePath           = if (-not $NoCache -and -not $FromCache) { $resolvedCachePath } else { $null }
+        GapResults          = $gapResults
+        OverallReadiness    = $overallReadiness
+        CorrelationResults  = $correlationResults
+        StaleResults        = $staleResults
+        AppReadiness        = $appReadiness
+        GapCsvPath          = $gapCsvPath
+        CRSummaryPath       = $crSummaryPath
     }
 
     return $pipelineResult
