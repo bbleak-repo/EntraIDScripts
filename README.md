@@ -1,6 +1,23 @@
-# Active Directory Discovery & Comparison Tool
+# EntraID -- AD Discovery, Lighthouse Security Research & MSP Tooling
 
-Enterprise-grade Active Directory discovery and comparison toolkit designed for environments without RSAT or administrative privileges. Built with cross-platform support for testing and development.
+Enterprise-grade Active Directory discovery/comparison toolkit and Microsoft Lighthouse/GDAP security research for MSP environments.
+
+## Project Components
+
+### 1. AD Discovery & Comparison Tool
+PowerShell framework for discovering and comparing AD domain architectures. No RSAT or admin rights required.
+
+### 2. Microsoft Lighthouse MSP Security Research
+Deep research into Microsoft 365 Lighthouse, GDAP, Conditional Access, PAM/JIT (Entra PIM + CyberArk), PRT/device trust, and auditing (Sentinel/Purview) for MSP-managed customer tenants. Includes a NotebookLM-optimized podcast guide, SOP templates, and 4 HTML reference dashboards.
+
+See `docs/deep-research/` for all deliverables, or `docs/STATUS.md` for the full session log.
+
+### 3. Break-Glass Tool
+Self-contained break-glass domain admin password management tool. See `BreakGlass-Tool/` for details.
+
+---
+
+## AD Discovery & Comparison Tool
 
 ## Features
 
@@ -578,4 +595,76 @@ For issues, questions, or contributions, contact:
 
 ---
 
-**Note**: This tool performs read-only operations and does not modify Active Directory in any way. All queries use standard LDAP protocol with user-level permissions.
+## Microsoft Lighthouse MSP Security Research
+
+Deep research produced via #NotebookLM DEEP TIER2 framework (Opus topic analysis, 7 parallel Sonnet research agents, Sonnet technical writer).
+
+### Deliverables
+
+| Type | File | Description |
+|------|------|-------------|
+| Podcast Guide | `docs/deep-research/podcasts/MS-Lighthouse-MSP-Security-Podcast-Guide.md` | 10,400-word narrative optimized for Google NotebookLM (~50 min audio) |
+| SOP Template | `docs/deep-research/templates/GDAP-Lighthouse-Security-SOP-Template.md` | 9 standalone SOPs for GDAP lifecycle management |
+| Executive HTML | `docs/deep-research/MS-Lighthouse-Executive-Summary.html` | C-suite overview: stats, risks, recommendations |
+| Architecture HTML | `docs/deep-research/MS-Lighthouse-Architecture-Permissions.html` | GDAP model, tier structure, role mappings |
+| Security HTML | `docs/deep-research/MS-Lighthouse-Security-Controls.html` | CA, PAM/JIT, auditing, PRT, KQL queries |
+| Risk HTML | `docs/deep-research/MS-Lighthouse-Risk-Compliance.html` | Breach cases, risk matrix, SOC2/ISO/NIST mapping |
+| Source Research | `docs/deep-research/source-research/DEEP_*_2026-03-30.md` | 7 sourced research files (~340K total) |
+| Planning | `docs/deep-research/planning/PLAN_MS-Lighthouse-MSP-Security_2026-03-30.md` | Topic decomposition and agent assignments |
+
+### Key Topics Covered
+
+- M365 Lighthouse vs Azure Lighthouse (architecture disambiguation)
+- GDAP permission model, least-privilege tiering, SOW alignment
+- Conditional Access for partner access (geo-fencing, phishing-resistant MFA, device compliance)
+- Entra PIM for GDAP JIT (the only native mechanism) + CyberArk hybrid PAM architecture
+- PRT mechanics, TPM binding, pass-the-PRT risks for MSP scenarios
+- Auditing via Sentinel (KQL queries), Purview (UserType 9), Lighthouse alerts
+- Breach case studies: SolarWinds, Kaseya, ConnectWise, BerryDunn
+- SOPs: onboarding, offboarding, incident response, compliance mapping
+- Cyber insurance implications
+
+### How to Generate the Podcast
+
+1. Go to [Google NotebookLM](https://notebooklm.google.com)
+2. Upload `docs/deep-research/podcasts/MS-Lighthouse-MSP-Security-Podcast-Guide.md`
+3. Use the "Audio Overview" feature
+
+---
+
+## Microsoft Purview PAM -- HLA Role Protection Strategy
+
+Analysis of all ~90 Microsoft Purview roles classified into a 4-tier HLA (High-Level Access) model for PAM protection using CyberArk and Entra ID PIM. Includes stakeholder-ready deliverables for leadership approval, technical implementation, and change management.
+
+### Tier Model Summary
+
+| Tier | Protection | Roles | Who Is Affected |
+|------|-----------|-------|-----------------|
+| **Tier 1** | CyberArk Full PSM (session proxy + recording) | 12 roles (Global Admin, eDiscovery Admin, Compliance Data Admin, etc.) | 5-8 individuals |
+| **Tier 2** | CyberArk Vault + Entra PIM (no PSM proxy) | ~15 roles (IRM Admins, Sensitivity Label Admin, Audit Manager, etc.) | 15-25 individuals |
+| **Tier 3** | Entra PIM Only (JIT activation) | ~12 roles (eDiscovery Manager, IRM Investigators, etc.) | 20-40 individuals |
+| **Tier 4** | MFA + Conditional Access (existing) | 50+ roles (all Viewers, Readers) | Majority -- no change |
+
+### Deliverables
+
+| Type | File | Audience |
+|------|------|----------|
+| Leadership Proposal | `docs/deep-research/Purview-PAM-Leadership-Proposal.html` | CISO, CCO, executive leadership |
+| Technical Implementation | `docs/deep-research/Purview-PAM-Technical-Implementation.html` | IAM engineers, CyberArk/Entra admins |
+| Change Requests | `docs/deep-research/Purview-PAM-Change-Requests.html` | Change management, implementation teams |
+
+### Change Requests Overview
+
+**8 Entra PIM CRs** (CR-PIM-001 through CR-PIM-008): PIM eligible conversions for compliance, eDiscovery, DLP, IRM, data governance, audit roles + access reviews + Conditional Access policies.
+
+**6 CyberArk CRs** (CR-CYA-001 through CR-CYA-006): Safe/platform config, Tier 1 account onboarding, Tier 2 credential vaulting, PSM recording, cross-platform monitoring, automated reporting.
+
+**Implementation:** 4 phases over 16 weeks. All CRs include scope, steps, testing criteria, rollback plans, and dependencies.
+
+### How to View
+
+Open any `.html` file in `docs/deep-research/` directly in a browser. All are self-contained with embedded CSS (dark theme, no external dependencies).
+
+---
+
+**Note**: The AD Discovery tool performs read-only operations and does not modify Active Directory in any way. All queries use standard LDAP protocol with user-level permissions.
