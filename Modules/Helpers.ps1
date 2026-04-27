@@ -40,24 +40,89 @@ function Test-IsWindowsPlatform {
     # Fallback (should never reach here)
     return $false
 }
+# ---------------------------------------------------------------------------
+# Shim layer over ADLdap.ps1
+# ---------------------------------------------------------------------------
+# The public helpers below (Get-RootDSE, New-LdapSearcher, Invoke-LdapQuery)
+# keep their original signatures so the 8 consumer modules don't need to
+# change, but their internals now run on the modern
+# System.DirectoryServices.Protocols.LdapConnection stack via ADLdap.ps1.
+# That stack works against DCs enforcing LDAP Channel Binding / Signing
+# (the hardened modern default), which the legacy DirectoryEntry / ADSI
+# path cannot do.
+#
+# When a per-run connection pool is installed by the orchestrator as
+# $script:AdLdapPool, the shim acquires contexts from the pool (one
+# LdapConnection per server, reused). When no pool is present, each helper
+# opens a one-shot connection and disposes it. This keeps existing callers
+# (and unit tests) working with zero changes.
+#
+# Automatic post-processing applied to every entry returned by the shim:
+#   - Generalized Time attrs (whenCreated, whenChanged, currentTime,
+#     dSCorePropagationData) converted to [datetime] so legacy callers
+#     doing $x.whenCreated.ToString('...') keep working.
+#   - Binary attrs (objectSid, objectGUID, schemaIDGUID, etc.) returned as
+#     byte[] so New-Object SecurityIdentifier works as before.
+#   - ADSPath synthetic key in 'LDAP://<server>/<dn>' form preserved.
+#   - Lowercase 'distinguishedName' alias preserved.
+
+$script:AdLdapBinaryAttrs = @(
+    'objectSid','objectGUID','schemaIDGUID','attributeSecurityGUID',
+    'mS-DS-ConsistencyGuid','msExchMailboxGuid','sIDHistory','tokenGroups',
+    'tokenGroupsGlobalAndUniversal','tokenGroupsNoGCAcceptable','userCertificate',
+    'userSMIMECertificate','cACertificate','thumbnailPhoto','thumbnailLogo'
+)
+$script:AdLdapGeneralizedTimeAttrs = @(
+    'whenCreated','whenChanged','currentTime','dSCorePropagationData'
+)
+
+function script:ConvertFrom-LdapGeneralizedTime {
+    <#
+    .SYNOPSIS
+        Private: converts a Generalized Time string (YYYYMMDDHHMMSS[.f][Z|±HHMM])
+        to a [datetime] in UTC. Returns $null for null/empty/unparseable.
+    #>
+    param($Value)
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [datetime]) { return $Value }
+    if ($Value -is [array]) {
+        if ($Value.Count -eq 0) { return $null }
+        $Value = $Value[0]
+    }
+    $s = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($s)) { return $null }
+    if ($s -match '^(\d{14})') {
+        try {
+            return [datetime]::ParseExact(
+                $matches[1], 'yyyyMMddHHmmss',
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                [System.Globalization.DateTimeStyles]::AssumeUniversal -bor `
+                [System.Globalization.DateTimeStyles]::AdjustToUniversal)
+        } catch { return $null }
+    }
+    return $null
+}
 
 function Get-RootDSE {
     <#
     .SYNOPSIS
-        Connects to Active Directory RootDSE
+        Reads fundamental AD directory information from the RootDSE.
 
     .DESCRIPTION
-        Retrieves fundamental directory information from RootDSE including
-        naming contexts, functional levels, and domain controller details
+        Returns a hashtable of RootDSE attributes used by downstream modules
+        (naming contexts, functional levels, DC hostname, etc.). When a
+        script-scope connection pool ($script:AdLdapPool) exists, the
+        connection is acquired from the pool; otherwise a one-shot connection
+        is opened and disposed.
 
     .PARAMETER Server
-        Domain controller FQDN or domain name
+        Domain controller FQDN or domain name.
 
     .PARAMETER Credential
-        Optional credentials for authentication
+        Optional credentials for authentication.
 
     .OUTPUTS
-        Hashtable with RootDSE attributes
+        Hashtable with RootDSE attributes.
     #>
     [CmdletBinding()]
     [OutputType([hashtable])]
@@ -69,75 +134,79 @@ function Get-RootDSE {
         [PSCredential]$Credential
     )
 
+    $ctx = $null
+    $ownCtx = $false
     try {
-        # Build LDAP path to RootDSE
-        $ldapPath = "LDAP://$Server/RootDSE"
-
-        # Create directory entry
-        if ($Credential) {
-            $rootDSE = New-Object System.DirectoryServices.DirectoryEntry(
-                $ldapPath,
-                $Credential.UserName,
-                $Credential.GetNetworkCredential().Password
-            )
+        if ($script:AdLdapPool) {
+            $ctx = Get-AdLdapPooledContext -Pool $script:AdLdapPool -Domain $Server
         } else {
-            $rootDSE = New-Object System.DirectoryServices.DirectoryEntry($ldapPath)
+            $connParams = @{ Server = $Server }
+            if ($Credential) { $connParams.Credential = $Credential }
+            $ctx = New-AdLdapConnection @connParams
+            $ownCtx = $true
         }
 
-        # Force connection by accessing a property
-        $null = $rootDSE.distinguishedName
+        $dse = Get-AdLdapRootDse -Context $ctx -Attributes @(
+            'defaultNamingContext','schemaNamingContext','configurationNamingContext',
+            'rootDomainNamingContext','forestFunctionality','domainFunctionality',
+            'domainControllerFunctionality','dnsHostName','currentTime','supportedLDAPVersion'
+        )
 
-        # Extract key attributes
-        $result = @{
-            defaultNamingContext = $rootDSE.defaultNamingContext.Value
-            schemaNamingContext = $rootDSE.schemaNamingContext.Value
-            configurationNamingContext = $rootDSE.configurationNamingContext.Value
-            rootDomainNamingContext = $rootDSE.rootDomainNamingContext.Value
-            forestFunctionality = if ($rootDSE.forestFunctionality.Value) { [int]$rootDSE.forestFunctionality.Value } else { 0 }
-            domainFunctionality = if ($rootDSE.domainFunctionality.Value) { [int]$rootDSE.domainFunctionality.Value } else { 0 }
-            domainControllerFunctionality = if ($rootDSE.domainControllerFunctionality.Value) { [int]$rootDSE.domainControllerFunctionality.Value } else { 0 }
-            dnsHostName = $rootDSE.dnsHostName.Value
-            currentTime = $rootDSE.currentTime.Value
-            supportedLDAPVersion = $rootDSE.supportedLDAPVersion.Value
+        $toInt = {
+            param($v)
+            if ($null -eq $v -or $v -eq '') { return 0 }
+            try { return [int]$v } catch { return 0 }
         }
 
-        $rootDSE.Dispose()
-        return $result
+        return @{
+            defaultNamingContext          = [string]$dse.defaultNamingContext
+            schemaNamingContext           = [string]$dse.schemaNamingContext
+            configurationNamingContext    = [string]$dse.configurationNamingContext
+            rootDomainNamingContext       = [string]$dse.rootDomainNamingContext
+            forestFunctionality           = & $toInt $dse.forestFunctionality
+            domainFunctionality           = & $toInt $dse.domainFunctionality
+            domainControllerFunctionality = & $toInt $dse.domainControllerFunctionality
+            dnsHostName                   = [string]$dse.dnsHostName
+            currentTime                   = ConvertFrom-LdapGeneralizedTime $dse.currentTime
+            supportedLDAPVersion          = $dse.supportedLDAPVersion
+        }
 
     } catch {
-        throw "Failed to connect to RootDSE on $Server : $_"
+        throw "Failed to connect to RootDSE on ${Server}: $_"
+    } finally {
+        if ($ownCtx) { Close-AdLdapConnection $ctx }
     }
 }
 
 function New-LdapSearcher {
     <#
     .SYNOPSIS
-        Creates configured DirectorySearcher object
+        Builds a shim searcher context for use with Invoke-LdapQuery.
 
     .DESCRIPTION
-        Constructs LDAP searcher with proper paging, timeout, and property loading
-        Uses objectCategory (indexed) over objectClass for performance
+        Returns a PSCustomObject carrying the search parameters. The shim
+        searcher has a no-op Dispose() method so existing modules that call
+        $searcher.Dispose() continue to work unchanged.
 
     .PARAMETER SearchRoot
-        LDAP path to search base (e.g., LDAP://DC=contoso,DC=com)
+        LDAP path: 'LDAP://<server>' or 'LDAP://<server>/<baseDN>'.
 
     .PARAMETER Filter
-        LDAP filter string (e.g., (objectCategory=person))
+        LDAP filter string.
 
     .PARAMETER Properties
-        Array of attribute names to retrieve
+        Array of attribute names to retrieve. '*' returns all attributes.
 
     .PARAMETER Credential
-        Optional credentials for authentication
+        Optional credentials. Used only when no connection pool is installed.
 
     .PARAMETER Config
-        Configuration hashtable with LdapPageSize and LdapTimeout
+        Hashtable with LdapPageSize, LdapTimeout, and optional AllowInsecure.
 
     .OUTPUTS
-        System.DirectoryServices.DirectorySearcher
+        PSCustomObject shim searcher.
     #>
     [CmdletBinding()]
-    [OutputType([System.DirectoryServices.DirectorySearcher])]
     param(
         [Parameter(Mandatory = $true)]
         [string]$SearchRoot,
@@ -155,164 +224,145 @@ function New-LdapSearcher {
         [hashtable]$Config = @{}
     )
 
-    try {
-        # Create directory entry for search root
-        if ($Credential) {
-            $directoryEntry = New-Object System.DirectoryServices.DirectoryEntry(
-                $SearchRoot,
-                $Credential.UserName,
-                $Credential.GetNetworkCredential().Password
-            )
-        } else {
-            $directoryEntry = New-Object System.DirectoryServices.DirectoryEntry($SearchRoot)
-        }
-
-        # Create searcher
-        $searcher = New-Object System.DirectoryServices.DirectorySearcher($directoryEntry)
-        $searcher.Filter = $Filter
-        $searcher.SearchScope = [System.DirectoryServices.SearchScope]::Subtree
-
-        # Configure paging (critical for large result sets)
-        $pageSize = if ($Config.LdapPageSize) { $Config.LdapPageSize } else { 1000 }
-        $searcher.PageSize = $pageSize
-
-        # Configure timeout
-        $timeoutSeconds = if ($Config.LdapTimeout) { $Config.LdapTimeout } else { 120 }
-        $searcher.ServerTimeLimit = New-TimeSpan -Seconds $timeoutSeconds
-        $searcher.ClientTimeout = New-TimeSpan -Seconds ($timeoutSeconds + 10)
-
-        # Load requested properties
-        if ($Properties -and $Properties.Count -gt 0 -and $Properties[0] -ne '*') {
-            $searcher.PropertiesToLoad.Clear()
-            foreach ($prop in $Properties) {
-                $null = $searcher.PropertiesToLoad.Add($prop)
-            }
-        }
-
-        return $searcher
-
-    } catch {
-        if ($directoryEntry) { $directoryEntry.Dispose() }
-        throw "Failed to create LDAP searcher: $_"
+    # Parse SearchRoot: LDAP://<server>[/<baseDN>]
+    $server = $null
+    $baseDN = $null
+    if ($SearchRoot -match '^LDAP://([^/]+?)(?:/(.*))?$') {
+        $server = $matches[1]
+        if ($matches[2]) { $baseDN = $matches[2] }
+    } else {
+        throw "New-LdapSearcher: SearchRoot must be in 'LDAP://<server>[/<baseDN>]' form; got '$SearchRoot'"
     }
+
+    $searcher = [pscustomobject]@{
+        _IsAdLdapShim = $true
+        Server        = $server
+        BaseDN        = $baseDN
+        Filter        = $Filter
+        Properties    = $Properties
+        Credential    = $Credential
+        Config        = $Config
+        # Writable by consumers; default Subtree. Accepts either a string
+        # ('Base' / 'OneLevel' / 'Subtree') or a
+        # [System.DirectoryServices.SearchScope] enum value -- PowerShell
+        # coerces the enum to its string name on assignment, which matches
+        # what Invoke-LdapQuery expects below.
+        SearchScope   = 'Subtree'
+    }
+
+    # Backward-compat: legacy callers do $searcher.Dispose(). No-op in the shim.
+    Add-Member -InputObject $searcher -MemberType ScriptMethod -Name Dispose -Value { } -Force
+
+    return $searcher
 }
 
 function Invoke-LdapQuery {
     <#
     .SYNOPSIS
-        Executes LDAP query with proper resource cleanup
+        Executes the search described by a shim searcher and returns hashtables.
 
     .DESCRIPTION
-        Wraps DirectorySearcher.FindAll() with try/catch/finally
-        to ensure SearchResultCollection is always disposed
+        Runs via Invoke-AdLdapSearch under the hood. Attribute values come
+        back as strings (single-valued) or string arrays (multi-valued), with
+        the following automatic post-processing:
+          - Generalized Time attributes converted to [datetime] (UTC).
+          - Binary attributes (SID, GUID, certs, etc.) returned as byte[].
+          - 'ADSPath' synthetic key added in 'LDAP://<server>/<dn>' form.
+          - 'distinguishedName' lowercase alias preserved alongside
+            'DistinguishedName'.
 
     .PARAMETER Searcher
-        Configured DirectorySearcher object
+        Shim searcher returned by New-LdapSearcher.
 
     .OUTPUTS
-        Array of hashtables (converted from SearchResult objects)
+        Array of hashtables, one per matched LDAP entry.
     #>
     [CmdletBinding()]
     [OutputType([array])]
     param(
         [Parameter(Mandatory = $true)]
-        [System.DirectoryServices.DirectorySearcher]$Searcher
+        $Searcher
     )
 
-    $results = $null
-    $output = @()
+    if (-not $Searcher -or -not $Searcher._IsAdLdapShim) {
+        throw "Invoke-LdapQuery: expected a shim searcher from New-LdapSearcher."
+    }
 
+    $timeoutSeconds = if ($Searcher.Config.LdapTimeout)  { [int]$Searcher.Config.LdapTimeout }  else { 120 }
+    $pageSize       = if ($Searcher.Config.LdapPageSize) { [int]$Searcher.Config.LdapPageSize } else { 1000 }
+    $allowInsecure  = [bool]$Searcher.Config.AllowInsecure
+
+    $ctx = $null
+    $ownCtx = $false
     try {
-        # Execute query
-        $results = $Searcher.FindAll()
-
-        # Get property names from searcher
-        $propertyNames = if ($Searcher.PropertiesToLoad.Count -gt 0) {
-            $Searcher.PropertiesToLoad
+        if ($script:AdLdapPool) {
+            $ctx = Get-AdLdapPooledContext -Pool $script:AdLdapPool -Domain $Searcher.Server
         } else {
-            @()  # Will be populated from first result
-        }
-
-        # Convert each result to hashtable
-        foreach ($result in $results) {
-            # If no specific properties requested, get them from first result
-            if ($propertyNames.Count -eq 0) {
-                $propertyNames = $result.Properties.PropertyNames
+            $connParams = @{
+                Server         = $Searcher.Server
+                TimeoutSeconds = $timeoutSeconds
             }
-
-            $hashtable = ConvertTo-HashtableFromResult -Result $result -Properties $propertyNames
-            $output += $hashtable
+            if ($Searcher.Credential) { $connParams.Credential    = $Searcher.Credential }
+            if ($allowInsecure)       { $connParams.AllowInsecure = $true }
+            $ctx = New-AdLdapConnection @connParams
+            $ownCtx = $true
         }
 
-        return $output
+        $effBase = if ($Searcher.BaseDN) { $Searcher.BaseDN } else { $ctx.BaseDN }
+
+        # Which requested attributes are binary?
+        $requestedBinary = @()
+        $hasExplicitProps = ($Searcher.Properties -and $Searcher.Properties.Count -gt 0 -and $Searcher.Properties[0] -ne '*')
+        if ($hasExplicitProps) {
+            $reqLower = $Searcher.Properties | ForEach-Object { $_.ToLowerInvariant() }
+            foreach ($b in $script:AdLdapBinaryAttrs) {
+                if ($reqLower -contains $b.ToLowerInvariant()) {
+                    $requestedBinary += $b
+                }
+            }
+        }
+
+        # Translate the shim's SearchScope (string or .NET enum) to the
+        # canonical string Invoke-AdLdapSearch accepts.
+        $scopeStr = [string]$Searcher.SearchScope
+        if ($scopeStr -notin @('Base','OneLevel','Subtree')) { $scopeStr = 'Subtree' }
+
+        $searchParams = @{
+            Context        = $ctx
+            BaseDN         = $effBase
+            Filter         = $Searcher.Filter
+            Scope          = $scopeStr
+            PageSize       = $pageSize
+            TimeoutSeconds = $timeoutSeconds
+        }
+        if ($hasExplicitProps)              { $searchParams.Attributes       = $Searcher.Properties }
+        if ($requestedBinary.Count -gt 0)   { $searchParams.BinaryAttributes = $requestedBinary }
+
+        $raw = Invoke-AdLdapSearch @searchParams
+
+        # Post-process each entry
+        $output = New-Object System.Collections.Generic.List[hashtable]
+        foreach ($entry in $raw) {
+            foreach ($gt in $script:AdLdapGeneralizedTimeAttrs) {
+                if ($entry.ContainsKey($gt)) {
+                    $entry[$gt] = ConvertFrom-LdapGeneralizedTime $entry[$gt]
+                }
+            }
+            if (-not $entry.ContainsKey('ADSPath')) {
+                $entry['ADSPath'] = "LDAP://$($Searcher.Server)/$($entry.DistinguishedName)"
+            }
+            if (-not $entry.ContainsKey('distinguishedName') -and $entry.ContainsKey('DistinguishedName')) {
+                $entry['distinguishedName'] = $entry['DistinguishedName']
+            }
+            $output.Add($entry) | Out-Null
+        }
+        return ,$output.ToArray()
 
     } catch {
         throw "LDAP query failed: $_"
-
     } finally {
-        # Critical: always dispose SearchResultCollection
-        if ($results) {
-            $results.Dispose()
-        }
+        if ($ownCtx) { Close-AdLdapConnection $ctx }
     }
-}
-
-function ConvertTo-HashtableFromResult {
-    <#
-    .SYNOPSIS
-        Converts SearchResult to hashtable
-
-    .DESCRIPTION
-        Extracts properties from SearchResult object into clean hashtable
-        Handles multi-value properties and common AD attribute types
-
-    .PARAMETER Result
-        Single SearchResult object
-
-    .PARAMETER Properties
-        Array of property names to extract
-
-    .OUTPUTS
-        Hashtable with property values
-    #>
-    [CmdletBinding()]
-    [OutputType([hashtable])]
-    param(
-        [Parameter(Mandatory = $true)]
-        $Result,
-
-        [Parameter(Mandatory = $true)]
-        [array]$Properties
-    )
-
-    $hashtable = @{}
-
-    foreach ($propName in $Properties) {
-        if ($Result.Properties.Contains($propName)) {
-            $propValue = $Result.Properties[$propName]
-
-            # Handle multi-value properties
-            if ($propValue.Count -eq 1) {
-                $hashtable[$propName] = $propValue[0]
-            } elseif ($propValue.Count -gt 1) {
-                $hashtable[$propName] = @($propValue)
-            } else {
-                $hashtable[$propName] = $null
-            }
-        } else {
-            $hashtable[$propName] = $null
-        }
-    }
-
-    # Always include DN if available
-    if ($Result.Properties.Contains('distinguishedName') -and -not $hashtable.ContainsKey('distinguishedName')) {
-        $hashtable['distinguishedName'] = $Result.Properties['distinguishedName'][0]
-    }
-
-    # Always include path
-    $hashtable['ADSPath'] = $Result.Path
-
-    return $hashtable
 }
 
 function ConvertTo-ReadableTimestamp {
