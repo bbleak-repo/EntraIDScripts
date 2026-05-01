@@ -228,10 +228,52 @@ function script:Resolve-MemberDnToRecord {
         [Parameter(Mandatory = $true)]  [hashtable]$LocalContext,
         [Parameter(Mandatory = $true)]  [string]$LocalDomain,
         [Parameter(Mandatory = $false)] [hashtable]$Pool,
-        [Parameter(Mandatory = $false)] [int]$TimeoutSeconds = 120
+        [Parameter(Mandatory = $false)] [int]$TimeoutSeconds = 120,
+        [Parameter(Mandatory = $false)] [string[]]$IncludeAttributes = @()
     )
 
     $userAttrs = @('sAMAccountName','displayName','mail','userAccountControl','distinguishedName')
+    $extraAttrs = @($IncludeAttributes | Where-Object { $_ } | ForEach-Object { $_.Trim() })
+    if ($extraAttrs.Count -gt 0) {
+        $userAttrs = $userAttrs + $extraAttrs
+    }
+
+    # Helper: build member hashtable from search result, including extra attributes
+    $buildMemberRecord = {
+        param([hashtable]$m, [string]$domain)
+        $uac = if ($m.ContainsKey('userAccountControl')) { [int]$m.userAccountControl } else { 0 }
+        $record = @{
+            SamAccountName    = if ($m.ContainsKey('sAMAccountName')) { $m.sAMAccountName } else { $null }
+            DisplayName       = if ($m.ContainsKey('displayName'))    { $m.displayName }    else { $null }
+            Email             = if ($m.ContainsKey('mail'))           { $m.mail }           else { $null }
+            Enabled           = (($uac -band 2) -eq 0)
+            Domain            = $domain
+            DistinguishedName = $m.DistinguishedName
+        }
+        # Add extra requested attributes
+        foreach ($attr in $extraAttrs) {
+            $attrLower = $attr.ToLower()
+            $attrVal = if ($m.ContainsKey($attrLower)) { $m.$attrLower } elseif ($m.ContainsKey($attr)) { $m.$attr } else { $null }
+            # Special handling: manager is a DN -- resolve to display name
+            if ($attrLower -eq 'manager' -and $attrVal -and $queryCtx) {
+                $mgrName = $null
+                try {
+                    $mgrHit = Invoke-AdLdapSearch -Context $queryCtx -BaseDN $attrVal `
+                        -Filter '(objectCategory=person)' -Scope Base `
+                        -Attributes @('displayName','sAMAccountName') -TimeoutSeconds $TimeoutSeconds
+                    if ($mgrHit.Count -gt 0) {
+                        $mgrName = if ($mgrHit[0].ContainsKey('displayName')) { $mgrHit[0].displayName } else { $mgrHit[0].sAMAccountName }
+                    }
+                } catch { }
+                $record['Manager']   = $(if ($mgrName) { $mgrName } else { $attrVal })
+                $record['ManagerDN'] = $attrVal
+            } else {
+                $record[$attr] = $attrVal
+            }
+        }
+        return $record
+    }
+
     $partial = @{
         SamAccountName    = $null
         DisplayName       = $null
@@ -283,15 +325,8 @@ function script:Resolve-MemberDnToRecord {
         if ($userHit.Count -eq 0) { return $partial }
 
         $m = $userHit[0]
-        $uac = if ($m.ContainsKey('userAccountControl')) { [int]$m.userAccountControl } else { 0 }
-        return @{
-            SamAccountName    = if ($m.ContainsKey('sAMAccountName')) { $m.sAMAccountName } else { $null }
-            DisplayName       = if ($m.ContainsKey('displayName'))    { $m.displayName }    else { $null }
-            Email             = if ($m.ContainsKey('mail'))           { $m.mail }           else { $null }
-            Enabled           = (($uac -band 2) -eq 0)
-            Domain            = $targetDomain
-            DistinguishedName = $m.DistinguishedName
-        }
+        $queryCtx = $target  # Set for manager resolution in buildMemberRecord
+        return (& $buildMemberRecord $m $targetDomain)
     }
 
     # --- Direct cross-domain DN routing ---
@@ -320,15 +355,7 @@ function script:Resolve-MemberDnToRecord {
 
     if ($hit.Count -eq 0) { return $partial }
     $m = $hit[0]
-    $uac = if ($m.ContainsKey('userAccountControl')) { [int]$m.userAccountControl } else { 0 }
-    return @{
-        SamAccountName    = if ($m.ContainsKey('sAMAccountName')) { $m.sAMAccountName } else { $null }
-        DisplayName       = if ($m.ContainsKey('displayName'))    { $m.displayName }    else { $null }
-        Email             = if ($m.ContainsKey('mail'))           { $m.mail }           else { $null }
-        Enabled           = (($uac -band 2) -eq 0)
-        Domain            = $queryDomain
-        DistinguishedName = $m.DistinguishedName
-    }
+    return (& $buildMemberRecord $m $queryDomain)
 }
 
 function Get-GroupMembersDirect {
@@ -357,7 +384,8 @@ function Get-GroupMembersDirect {
         [Parameter(Mandatory = $true)]  [string]$GroupName,
         [Parameter(Mandatory = $false)] [PSCredential]$Credential,
         [Parameter(Mandatory = $false)] [hashtable]$Config = @{},
-        [Parameter(Mandatory = $false)] [hashtable]$ConnectionPool
+        [Parameter(Mandatory = $false)] [hashtable]$ConnectionPool,
+        [Parameter(Mandatory = $false)] [string[]]$IncludeAttributes = @()
     )
 
     $errors      = @()
@@ -462,7 +490,8 @@ function Get-GroupMembersDirect {
             try {
                 $record = Resolve-MemberDnToRecord -MemberDN $memberDN `
                     -LocalContext $ctx -LocalDomain $Domain `
-                    -Pool $ConnectionPool -TimeoutSeconds $timeoutSeconds
+                    -Pool $ConnectionPool -TimeoutSeconds $timeoutSeconds `
+                    -IncludeAttributes $IncludeAttributes
                 $members += $record
             } catch {
                 $errors += "Failed to query member '$memberDN': $($_.Exception.Message.Trim())"
@@ -528,7 +557,10 @@ function Get-GroupMembers {
         [hashtable]$Config = @{},
 
         [Parameter(Mandatory = $false)]
-        [hashtable]$ConnectionPool
+        [hashtable]$ConnectionPool,
+
+        [Parameter(Mandatory = $false)]
+        [string[]]$IncludeAttributes = @()
     )
 
     $errors = @()
@@ -555,6 +587,7 @@ function Get-GroupMembers {
             Config     = $Config
         }
         if ($ConnectionPool) { $directParams.ConnectionPool = $ConnectionPool }
+        if ($IncludeAttributes.Count -gt 0) { $directParams.IncludeAttributes = $IncludeAttributes }
         $raw = Get-GroupMembersDirect @directParams
 
         if ($raw.Errors.Count -gt 0) {

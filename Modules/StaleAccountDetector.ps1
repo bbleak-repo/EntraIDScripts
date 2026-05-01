@@ -7,20 +7,21 @@
     of user accounts to classify them as Active, Disabled, Stale, or NeverLoggedIn.
 
     Accounts classified as Disabled or Stale should be excluded from migration
-    Change Requests (they have no active Okta session to migrate).
+    Change Requests (they have no active session to migrate).
 
     Key behaviours:
-      - Uses LDAPS (636) with SecureSocketsLayer; falls back to LDAP (389) + Kerberos
-        Sealing when Config.AllowInsecure is $true
+      - Uses the shared ADLdap helpers (New-AdLdapConnection / Invoke-AdLdapSearch)
+        built on System.DirectoryServices.Protocols.LdapConnection. Tiered LDAPS/LDAP
+        negotiation is controlled by Config.AllowInsecure.
       - Each user is queried with a Base-scope search on their DistinguishedName
         (most efficient: avoids full subtree scans)
       - lastLogonTimestamp staleness threshold is Config.StaleAccountDays (default 90)
       - FileTime conversion handles special "never" sentinel values (0 and Int64.MaxValue)
-      - All DirectoryEntry and DirectorySearcher objects disposed in finally blocks
+      - Single LdapConnection is reused across all member queries and closed in finally
       - Structured logging via Write-GroupEnumLog (must be loaded in session)
 
 .NOTES
-    Requires GroupEnumerator.ps1 and GroupEnumLogger.ps1 to be dot-sourced first.
+    Requires ADLdap.ps1 and GroupEnumLogger.ps1 to be dot-sourced first.
     Compatible with PowerShell 5.1 and 7+. Targets Windows Active Directory only.
     Uses objectCategory (indexed) for all LDAP filters; never uses objectClass.
 
@@ -85,98 +86,6 @@ function ConvertFrom-FileTime {
 }
 
 # ---------------------------------------------------------------------------
-# Private: Connect-StaleDetectorLdap
-# Thin wrapper identical in pattern to the one in NestedGroupResolver so that
-# this module remains self-contained if dot-sourced alone.
-# Returns @{ Entry = ...; Port = ...; Secure = ...; Error = ... }
-# ---------------------------------------------------------------------------
-function script:Connect-StaleDetectorLdap {
-    param(
-        [string]$Domain,
-        [PSCredential]$Credential,
-        [hashtable]$Config,
-        [string]$BaseDN
-    )
-
-    $allowInsecure = if ($null -ne $Config.AllowInsecure) { $Config.AllowInsecure } else { $false }
-
-    $entryParams = @{
-        Domain     = $Domain
-        Port       = 636
-        Secure     = $true
-        Credential = $Credential
-    }
-    if ($BaseDN) { $entryParams.BaseDN = $BaseDN }
-
-    Write-GroupEnumLog -Level 'DEBUG' -Operation 'StaleDetect.LdapConnect' `
-        -Message "Attempting LDAPS (636) to domain '$Domain'" `
-        -Context @{ domain = $Domain; port = 636; baseDn = $BaseDN }
-
-    $entry = $null
-    try {
-        $entry = New-LdapDirectoryEntry @entryParams
-        $null  = $entry.distinguishedName
-
-        Write-GroupEnumLog -Level 'DEBUG' -Operation 'StaleDetect.LdapConnect' `
-            -Message "LDAPS (636) connected to '$Domain'" `
-            -Context @{ domain = $Domain; port = 636; tier = 'LDAPS' }
-
-        return @{ Entry = $entry; Port = 636; Secure = $true; Error = $null }
-
-    } catch {
-        $ldapsError = $_.ToString()
-        if ($entry) { $entry.Dispose(); $entry = $null }
-
-        Write-GroupEnumLog -Level 'WARN' -Operation 'StaleDetect.LdapConnect' `
-            -Message "LDAPS (636) failed for '$Domain': $ldapsError" `
-            -Context @{ domain = $Domain; port = 636; error = $ldapsError }
-
-        if (-not $allowInsecure) {
-            Write-GroupEnumLog -Level 'ERROR' -Operation 'StaleDetect.LdapConnect' `
-                -Message "LDAPS (636) failed and AllowInsecure is disabled for '$Domain'" `
-                -Context @{ domain = $Domain; error = $ldapsError }
-            return @{ Entry = $null; Port = 0; Secure = $false; Error = $ldapsError }
-        }
-
-        Write-Warning "LDAPS (636) failed for domain '$Domain': $ldapsError"
-        Write-Warning "Falling back to LDAP (389) with Kerberos Sealing."
-
-        Write-GroupEnumLog -Level 'INFO' -Operation 'StaleDetect.LdapConnect' `
-            -Message "Falling back to LDAP (389) with Kerberos Sealing for '$Domain'" `
-            -Context @{ domain = $Domain; port = 389; tier = 'Kerberos-Sealing' }
-
-        $entryParams389 = @{
-            Domain     = $Domain
-            Port       = 389
-            Secure     = $false
-            Credential = $Credential
-        }
-        if ($BaseDN) { $entryParams389.BaseDN = $BaseDN }
-
-        try {
-            $entry = New-LdapDirectoryEntry @entryParams389
-            $null  = $entry.distinguishedName
-
-            Write-GroupEnumLog -Level 'WARN' -Operation 'StaleDetect.LdapConnect' `
-                -Message "Connected via LDAP (389) to '$Domain'" `
-                -Context @{ domain = $Domain; port = 389; tier = 'Kerberos-Sealing'; ldapsError = $ldapsError }
-
-            return @{ Entry = $entry; Port = 389; Secure = $false; Error = "WARNING: Using LDAP (389) with Kerberos Sealing for domain '$Domain'. LDAPS (636) failed: $ldapsError" }
-
-        } catch {
-            if ($entry) { $entry.Dispose(); $entry = $null }
-            $ldapError = $_.ToString()
-
-            Write-GroupEnumLog -Level 'ERROR' -Operation 'StaleDetect.LdapConnect' `
-                -Message "Both LDAPS (636) and LDAP (389) failed for '$Domain'" `
-                -Context @{ domain = $Domain; ldapsError = $ldapsError; ldapError = $ldapError }
-
-            return @{ Entry = $null; Port = 0; Secure = $false; Error = "Both LDAPS (636) and LDAP (389) failed for domain '$Domain'. LDAPS error: $ldapsError -- LDAP error: $ldapError" }
-        }
-    }
-}
-
-# ---------------------------------------------------------------------------
 # Public: Get-AccountStaleness
 # ---------------------------------------------------------------------------
 function Get-AccountStaleness {
@@ -198,7 +107,7 @@ function Get-AccountStaleness {
         Accounts in Disabled, NeverLoggedIn, and Stale buckets should be flagged
         as skip candidates in migration Change Requests.
 
-        Requires New-LdapDirectoryEntry and Write-GroupEnumLog to be loaded in session.
+        Requires ADLdap.ps1 and Write-GroupEnumLog to be loaded in session.
 
     .PARAMETER Members
         Array of user hashtables as returned by Resolve-NestedGroupMembers or
@@ -249,7 +158,10 @@ function Get-AccountStaleness {
         [PSCredential]$Credential,
 
         [Parameter(Mandatory = $false)]
-        [hashtable]$Config = @{}
+        [hashtable]$Config = @{},
+
+        [Parameter(Mandatory = $false)]
+        [hashtable]$ConnectionPool
     )
 
     $errors = @()
@@ -258,6 +170,7 @@ function Get-AccountStaleness {
         $Config.StaleAccountDays
     } else { 90 }
     $timeoutSeconds = if ($Config.LdapTimeout)  { $Config.LdapTimeout }  else { 120 }
+    $allowInsecure  = if ($null -ne $Config.AllowInsecure) { $Config.AllowInsecure } else { $false }
 
     $cutoffDate = [DateTime]::UtcNow.AddDays(-$staleDays)
 
@@ -270,37 +183,55 @@ function Get-AccountStaleness {
         -Message "Starting staleness check for $($Members.Count) member(s) in domain '$Domain'" `
         -Context @{ domain = $Domain; memberCount = $Members.Count; staleDays = $staleDays; cutoff = $cutoffDate.ToString('yyyy-MM-dd') }
 
-    # Negotiate connection once to determine which port/protocol to use,
-    # then reuse the same parameters for individual member Base-scope queries.
-    # We do NOT hold a single connection open across all users -- each Base-scope
-    # query opens and disposes its own DirectoryEntry so cleanup is deterministic.
-    $connTest = script:Connect-StaleDetectorLdap -Domain $Domain -Credential $Credential -Config $Config
+    # Open (or acquire from pool) a single LdapConnection and reuse it across all per-member Base-scope queries.
+    $ctx = $null
+    $ownCtx = $false
+    try {
+        Write-GroupEnumLog -Level 'DEBUG' -Operation 'LdapConnect' `
+            -Message "Obtaining LDAP connection to '$Domain'" `
+            -Context @{ domain = $Domain; allowInsecure = $allowInsecure; pooled = [bool]$ConnectionPool }
 
-    if (-not $connTest.Entry) {
-        return @{
-            Disabled      = @()
-            Stale         = @()
-            Active        = @()
-            NeverLoggedIn = @()
-            Summary       = @{
-                TotalChecked       = 0
-                DisabledCount      = 0
-                StaleCount         = 0
-                ActiveCount        = 0
-                NeverLoggedInCount = 0
-                StaleThresholdDays = $staleDays
+        try {
+            if ($ConnectionPool) {
+                $ctx = Get-AdLdapPooledContext -Pool $ConnectionPool -Domain $Domain
+            } else {
+                $connParams = @{
+                    Server         = $Domain
+                    TimeoutSeconds = $timeoutSeconds
+                }
+                if ($Credential)    { $connParams.Credential    = $Credential }
+                if ($allowInsecure) { $connParams.AllowInsecure = $true }
+                $ctx = New-AdLdapConnection @connParams
+                $ownCtx = $true
             }
-            Errors = @("Cannot connect to domain '$Domain': $($connTest.Error)")
+        } catch {
+            Write-GroupEnumLog -Level 'ERROR' -Operation 'LdapConnect' `
+                -Message "Could not connect to '$Domain'" `
+                -Context @{ domain = $Domain; error = $_.ToString() }
+            return @{
+                Disabled      = @()
+                Stale         = @()
+                Active        = @()
+                NeverLoggedIn = @()
+                Summary       = @{
+                    TotalChecked       = 0
+                    DisabledCount      = 0
+                    StaleCount         = 0
+                    ActiveCount        = 0
+                    NeverLoggedInCount = 0
+                    StaleThresholdDays = $staleDays
+                }
+                Errors = @("Cannot connect to domain '$Domain': $($_.ToString())")
+            }
         }
-    }
 
-    if ($connTest.Error) { $errors += $connTest.Error }
+        Write-GroupEnumLog -Level 'INFO' -Operation 'LdapConnect' `
+            -Message "Connected to '$Domain' via $($ctx.Tier)" `
+            -Context @{ domain = $Domain; tier = $ctx.Tier; port = $ctx.Port; baseDN = $ctx.BaseDN; pooled = (-not $ownCtx) }
 
-    # Close the probe connection -- we only needed it to negotiate protocol
-    $connTest.Entry.Dispose()
-
-    $ldapPort   = $connTest.Port
-    $ldapSecure = $connTest.Secure
+        if ($ctx.Tier -ne 'LDAPS-Verified') {
+            $errors += "WARNING: Using tier '$($ctx.Tier)' (port $($ctx.Port)) for domain '$Domain'. Verified LDAPS was not available."
+        }
 
     foreach ($member in $Members) {
         $dn  = $member.DistinguishedName
@@ -330,72 +261,53 @@ function Get-AccountStaleness {
         }
 
         # Query AD for lastLogonTimestamp
-        $memberEntry      = $null
-        $memberSearcher   = $null
-        $memberResults    = $null
         $lastLogonDt      = $null
         $lastLogonRaw     = $null
         $queryFailed      = $false
         $wasDisabledLive  = $false
 
         try {
-            $memberEntry = New-LdapDirectoryEntry -Domain $Domain -Port $ldapPort `
-                -Secure $ldapSecure -Credential $Credential -BaseDN $dn
+            $memberHits = Invoke-AdLdapSearch -Context $ctx -BaseDN $dn `
+                -Filter '(objectCategory=person)' -Scope Base `
+                -Attributes @('lastLogonTimestamp','userAccountControl') `
+                -TimeoutSeconds $timeoutSeconds
 
-            $memberSearcher = New-Object System.DirectoryServices.DirectorySearcher($memberEntry)
-            $memberSearcher.Filter      = "(objectCategory=person)"
-            $memberSearcher.SearchScope = [System.DirectoryServices.SearchScope]::Base
-            $memberSearcher.PageSize    = 1
-            $memberSearcher.ServerTimeLimit = New-TimeSpan -Seconds $timeoutSeconds
-            $memberSearcher.ClientTimeout   = New-TimeSpan -Seconds ($timeoutSeconds + 10)
-            $null = $memberSearcher.PropertiesToLoad.Add('lastLogonTimestamp')
-            $null = $memberSearcher.PropertiesToLoad.Add('userAccountControl')
+            if ($memberHits -and $memberHits.Count -gt 0) {
+                $mr = $memberHits[0]
 
-            try {
-                $memberResults = $memberSearcher.FindAll()
+                # Re-check userAccountControl from the live query (in case Enabled was stale)
+                $uacLive = if ($mr.ContainsKey('userAccountControl')) {
+                    [int]$mr.userAccountControl
+                } else { $null }
 
-                if ($memberResults -and $memberResults.Count -gt 0) {
-                    $mr = $memberResults[0]
+                if ($null -ne $uacLive -and ($uacLive -band 2) -ne 0) {
+                    # Account became disabled since enumeration.
+                    $enriched = $member.Clone()
+                    $enriched.Enabled           = $false
+                    $enriched.LastLogon          = $null
+                    $enriched.LastLogonRaw       = $null
+                    $enriched.StalenessCategory  = 'Disabled'
 
-                    # Re-check userAccountControl from the live query (in case Enabled was stale)
-                    $uacLive = if ($mr.Properties['userAccountControl'].Count -gt 0) {
-                        [int]$mr.Properties['userAccountControl'][0]
-                    } else { $null }
+                    $null = $disabled.Add($enriched)
 
-                    if ($null -ne $uacLive -and ($uacLive -band 2) -ne 0) {
-                        # Account became disabled since enumeration.
-                        # Do NOT use continue here -- the outer finally would be skipped in PS 5.1.
-                        # Set a flag and let the outer try/finally complete normally.
-                        $enriched = $member.Clone()
-                        $enriched.Enabled           = $false
-                        $enriched.LastLogon          = $null
-                        $enriched.LastLogonRaw       = $null
-                        $enriched.StalenessCategory  = 'Disabled'
+                    Write-GroupEnumLog -Level 'DEBUG' -Operation 'StaleDetect' `
+                        -Message "Account '$sam' is disabled (UAC re-check) -- moving to Disabled bucket" `
+                        -Context @{ sam = $sam; dn = $dn; category = 'Disabled' }
 
-                        $null = $disabled.Add($enriched)
-
-                        Write-GroupEnumLog -Level 'DEBUG' -Operation 'StaleDetect' `
-                            -Message "Account '$sam' is disabled (UAC re-check) -- moving to Disabled bucket" `
-                            -Context @{ sam = $sam; dn = $dn; category = 'Disabled' }
-
-                        $wasDisabledLive = $true
-                    }
-
-                    if (-not $wasDisabledLive -and $mr.Properties['lastLogonTimestamp'].Count -gt 0) {
-                        $lastLogonRaw = $mr.Properties['lastLogonTimestamp'][0]
-                        $lastLogonDt  = ConvertFrom-FileTime -FileTime $lastLogonRaw
-                    }
-
-                } else {
-                    Write-GroupEnumLog -Level 'WARN' -Operation 'StaleDetect' `
-                        -Message "Base-scope query for '$sam' returned no results (DN may be stale or cross-domain)" `
-                        -Context @{ sam = $sam; dn = $dn }
-                    $errors += "No results for user '$sam' (DN: $dn) -- may be a cross-domain or deleted account"
-                    $queryFailed = $true
+                    $wasDisabledLive = $true
                 }
 
-            } finally {
-                if ($memberResults) { $memberResults.Dispose() }
+                if (-not $wasDisabledLive -and $mr.ContainsKey('lastLogonTimestamp')) {
+                    $lastLogonRaw = $mr.lastLogonTimestamp
+                    $lastLogonDt  = ConvertFrom-FileTime -FileTime $lastLogonRaw
+                }
+
+            } else {
+                Write-GroupEnumLog -Level 'WARN' -Operation 'StaleDetect' `
+                    -Message "Base-scope query for '$sam' returned no results (DN may be stale or cross-domain)" `
+                    -Context @{ sam = $sam; dn = $dn }
+                $errors += "No results for user '$sam' (DN: $dn) -- may be a cross-domain or deleted account"
+                $queryFailed = $true
             }
 
         } catch {
@@ -406,10 +318,6 @@ function Get-AccountStaleness {
                 -Context @{ sam = $sam; dn = $dn; error = $_.ToString() }
 
             $queryFailed = $true
-
-        } finally {
-            if ($memberSearcher) { $memberSearcher.Dispose() }
-            if ($memberEntry)    { $memberEntry.Dispose() }
         }
 
         # Skip classification if the live UAC check already bucketed this account, or the query failed
@@ -451,6 +359,10 @@ function Get-AccountStaleness {
                 -Message "Account '$sam' last logged in $daysAgo days ago -- classified as Active" `
                 -Context @{ sam = $sam; dn = $dn; lastLogon = $lastLogonDt.ToString('yyyy-MM-dd'); daysAgo = $daysAgo; category = 'Active' }
         }
+    }
+
+    } finally {
+        if ($ctx -and $ownCtx) { Close-AdLdapConnection $ctx }
     }
 
     $disabledCount      = $disabled.Count

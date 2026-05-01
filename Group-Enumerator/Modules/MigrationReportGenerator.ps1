@@ -145,8 +145,8 @@ function Export-MigrationReport {
         $skippedResults  = @($GroupResults | Where-Object { $_.Data.Skipped -eq $true })
         $enumerated      = @($GroupResults | Where-Object { $_.Data.Skipped -ne $true })
 
-        $totalMembers = 0
-        foreach ($e in $enumerated) { $totalMembers += [int]$e.Data.MemberCount }
+        $totalMembers = ($enumerated | Measure-Object -Property { $_.Data.MemberCount } -Sum).Sum
+        if (-not $totalMembers) { $totalMembers = 0 }
 
         # ---- Categorise match results ----
         $matchedItems   = @()
@@ -169,27 +169,17 @@ function Export-MigrationReport {
         $totalCrItems    = 0
 
         if ($OverallReadiness) {
-            # GapAnalysis emits OverallPercent / TotalCRItems; older callers may
-            # supply ReadinessPercent / TotalCrItems. Accept either.
-            $pctValue = if ($null -ne $OverallReadiness.OverallPercent)    { $OverallReadiness.OverallPercent }
-                        elseif ($null -ne $OverallReadiness.ReadinessPercent) { $OverallReadiness.ReadinessPercent }
-                        else { 0 }
-            $readinessPct     = [int][Math]::Round([double]$pctValue)
+            $readinessPct     = if ($null -ne $OverallReadiness.ReadinessPercent) { [int]$OverallReadiness.ReadinessPercent }  else { 0 }
             $readyGroups      = if ($null -ne $OverallReadiness.ReadyGroups)      { [int]$OverallReadiness.ReadyGroups }       else { 0 }
             $inProgressGroups = if ($null -ne $OverallReadiness.InProgressGroups) { [int]$OverallReadiness.InProgressGroups } else { 0 }
             $blockedGroups    = if ($null -ne $OverallReadiness.BlockedGroups)    { [int]$OverallReadiness.BlockedGroups }     else { 0 }
-            $crValue = if ($null -ne $OverallReadiness.TotalCRItems)      { $OverallReadiness.TotalCRItems }
-                       elseif ($null -ne $OverallReadiness.TotalCrItems)  { $OverallReadiness.TotalCrItems }
-                       else { 0 }
-            $totalCrItems = [int]$crValue
+            $totalCrItems     = if ($null -ne $OverallReadiness.TotalCrItems)     { [int]$OverallReadiness.TotalCrItems }      else { 0 }
         } elseif ($GapResults -and $GapResults.Count -gt 0) {
             # Derive from gap results when no explicit OverallReadiness supplied
-            $totalCrItems = 0
-            $pctSum = 0
-            foreach ($gr in $GapResults) {
-                $totalCrItems += [int]$gr.CrCount
-                $pctSum       += [double]$gr.ReadinessPercent
-            }
+            $totalCrItems    = ($GapResults | Measure-Object -Property { $_.CrCount } -Sum).Sum
+            if (-not $totalCrItems) { $totalCrItems = 0 }
+            $pctSum = ($GapResults | Measure-Object -Property { $_.ReadinessPercent } -Sum).Sum
+            if (-not $pctSum) { $pctSum = 0 }
             $readinessPct    = if ($GapResults.Count -gt 0) { [int]($pctSum / $GapResults.Count) } else { 0 }
             $readyGroups     = @($GapResults | Where-Object { $_.ReadinessPercent -ge 80 }).Count
             $inProgressGroups = @($GapResults | Where-Object { $_.ReadinessPercent -ge 50 -and $_.ReadinessPercent -lt 80 }).Count
@@ -973,14 +963,18 @@ function Get-StatusBadgeHtml {
     $normalized = ($Status -replace '\s', '').ToLower()
 
     switch ($normalized) {
-        'ready'           { return "<span class='badge badge-ready'>Ready</span>" }
-        'addtogroup'      { return "<span class='badge badge-addtogroup'>Add to Group</span>" }
-        'notprovisioned'  { return "<span class='badge badge-notprovisioned'>Not Provisioned</span>" }
-        'orphanedaccess'  { return "<span class='badge badge-orphanedaccess'>Orphaned Access</span>" }
-        'skip'            { return "<span class='badge badge-skip'>Skip</span>" }
-        'inprogress'      { return "<span class='badge badge-addtogroup'>In Progress</span>" }
-        'blocked'         { return "<span class='badge badge-notprovisioned'>Blocked</span>" }
-        default           { return "<span class='badge badge-skip'>$(Escape-MigrationHtml $Status)</span>" }
+        'ready'            { return "<span class='badge badge-ready'>Ready</span>" }
+        'addtogroup'       { return "<span class='badge badge-addtogroup'>Add to Group</span>" }
+        'existsnotingroup' { return "<span class='badge badge-addtogroup'>Exists - Add to Group</span>" }
+        'notprovisioned'   { return "<span class='badge badge-notprovisioned'>Not Provisioned</span>" }
+        'notindomain'      { return "<span class='badge badge-notprovisioned'>Not In Domain</span>" }
+        'orphanedaccess'   { return "<span class='badge badge-orphanedaccess'>Orphaned Access</span>" }
+        'skip'             { return "<span class='badge badge-skip'>Skip</span>" }
+        'skip-stale'       { return "<span class='badge badge-skip'>Skip (Stale)</span>" }
+        'skip-disabled'    { return "<span class='badge badge-skip'>Skip (Disabled)</span>" }
+        'inprogress'       { return "<span class='badge badge-addtogroup'>In Progress</span>" }
+        'blocked'          { return "<span class='badge badge-notprovisioned'>Blocked</span>" }
+        default            { return "<span class='badge badge-skip'>$(Escape-MigrationHtml $Status)</span>" }
     }
 }
 

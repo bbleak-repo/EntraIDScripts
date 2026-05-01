@@ -90,8 +90,8 @@ function Export-GroupReport {
         $enumerated       = @($GroupResults | Where-Object { $_.Data.Skipped -ne $true })
 
         # Aggregate totals
-        $totalMembers = ($enumerated | Measure-Object -Property { $_.Data.MemberCount } -Sum).Sum
-        if (-not $totalMembers) { $totalMembers = 0 }
+        $totalMembers = 0
+        foreach ($e in $enumerated) { $totalMembers += [int]$e.Data.MemberCount }
 
         # ---- Categorise results ----
         $matchedItems   = @()

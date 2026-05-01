@@ -3,21 +3,29 @@
     Cross-domain group membership enumeration orchestrator
 
 .DESCRIPTION
-    Reads a CSV of domain/group pairs, enumerates members from each AD domain via LDAPS,
-    optionally runs fuzzy cross-domain name matching, and produces an HTML report and/or
-    JSON cache file.
+    Reads a CSV of domain/group pairs, enumerates members from each AD domain via
+    System.DirectoryServices.Protocols.LdapConnection (the modern LDAP stack that
+    works against DCs enforcing LDAP Channel Binding / Signing), optionally runs
+    fuzzy cross-domain name matching, and produces an HTML report and/or JSON cache.
 
-    Features:
+    Works equally well for single-domain inventory and multi-forest migration
+    readiness. Cross-domain and cross-forest features are opt-in switches.
+
+    Core features:
     - CSV input in Domain,GroupName or DOMAIN\GroupName backslash format
-    - LDAPS-only enumeration (port 636) via GroupEnumerator module
-    - Levenshtein-based fuzzy cross-domain group matching
-    - Professional dark/light-theme HTML report
-    - JSON cache for offline report regeneration with -FromCache
+    - Per-domain connection pooling (one LdapConnection reused across all groups)
+    - Tiered connection strategy with optional cert-verification bypass and
+      Kerberos sign+seal fallback on 389 (-AllowInsecure)
+    - Dark/light HTML reports, JSON cache for offline report regeneration
+    - Structured JSON Lines logs with per-tier LdapConnect events
 
     V2 features (enabled by switches):
     - Nested group resolution to flat user lists (-ResolveNested)
     - Stale/disabled account detection (-DetectStale)
+    - Fuzzy cross-domain group name matching via Levenshtein (-FuzzyMatch)
     - Cross-domain user correlation and gap analysis (-AnalyzeGaps)
+    - Cross-forest member resolution when multiple domains are pooled:
+      direct foreign DN routing and ForeignSecurityPrincipal SID lookup
     - Application-level readiness from CSV mapping (-AppMappingCsv)
     - SMTP delivery of migration readiness report (-SendEmail)
 
@@ -70,7 +78,7 @@
     Stale threshold is controlled by -StaleDays or config StaleAccountDays (default 90).
 
 .PARAMETER AppMappingCsv
-    Optional path to a CSV mapping Okta application names to AD group pairs.
+    Optional path to a CSV mapping application names to AD group pairs.
     Columns: AppName,SourceGroup,TargetGroup,Notes
 
 .PARAMETER SendEmail
@@ -81,27 +89,51 @@
     Override the StaleAccountDays config value. 0 = use config value.
 
 .EXAMPLE
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv
+    Simplest single-domain inventory. Produces V1 HTML + JSON cache.
+
+.EXAMPLE
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -ResolveNested -DetectStale
+    Single-domain inventory with nested group flattening and stale account flagging.
+
+.EXAMPLE
     .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch
+    Cross-domain fuzzy match. Verified LDAPS only (Tier 1).
 
 .EXAMPLE
-    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -Credential $cred -Theme light -NoCache
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -AnalyzeGaps -DetectStale -ResolveNested -AllowInsecure
+    Full two-forest migration readiness pipeline with all fallback tiers enabled.
 
 .EXAMPLE
-    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FromCache -CachePath .\Cache\groups-20260408.json
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FromCache -CachePath .\Cache\groups-20260415-103821.json
+    Offline re-render of an HTML report from a saved JSON cache. No AD access.
 
 .EXAMPLE
-    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -AnalyzeGaps -DetectStale -ResolveNested
+    $cred = Get-Credential
+    .\Invoke-GroupEnumerator.ps1 -CsvPath .\groups.csv -FuzzyMatch -Credential $cred
+    Pass explicit credentials (Kerberos integrated auth otherwise).
 
 .NOTES
     Author: EntraID Team
     Requires: PowerShell 5.1 or PowerShell 7+
-    Always uses LDAPS (port 636). Never uses plaintext LDAP 389.
+
+    Connection tiers (tried in order, highest security first):
+      Tier 1: LDAPS 636, cert verification strict       (always attempted)
+      Tier 2: LDAPS 636, cert verification bypassed     (requires -AllowInsecure)
+      Tier 3: LDAP  389, SASL sign + seal (Kerberos)    (requires -AllowInsecure)
+      Tier 4: LDAP  389, no signing/sealing             (not reachable via switches)
+
+    Run with no arguments or -Help for a usage summary with examples.
+    Run 'Get-Help .\Invoke-GroupEnumerator.ps1 -Detailed' for full parameter docs.
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string]$CsvPath,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Help,
 
     [Parameter(Mandatory = $false)]
     [PSCredential]$Credential,
@@ -172,6 +204,92 @@ $ErrorActionPreference = 'Stop'
 $scriptRoot = $PSScriptRoot
 
 # ---------------------------------------------------------------------------
+# Usage / help output when invoked with no args or -Help
+# ---------------------------------------------------------------------------
+function Show-Usage {
+    $self = Split-Path -Leaf $PSCommandPath
+    $lines = @(
+        ''
+        'Cross-Domain Group Enumerator'
+        '============================='
+        'Enumerates Active Directory group membership via LdapConnection.'
+        'Works for single-domain inventory and cross-forest migration readiness.'
+        ''
+        'USAGE'
+        "  .\$self -CsvPath <file> [options]"
+        "  .\$self -Help"
+        ''
+        'REQUIRED'
+        '  -CsvPath <path>          CSV of groups to enumerate'
+        '                             Format 1: headers Domain,GroupName  (e.g. CORP,Domain Admins)'
+        '                             Format 2: header  Group             (e.g. CORP\Domain Admins)'
+        '                             Samples:  Templates\groups-example-standard.csv'
+        '                                       Templates\groups-example-backslash.csv'
+        ''
+        'CONNECTIVITY'
+        '  -Credential <pscred>     Pass explicit creds (default = current user via Kerberos)'
+        '  -AllowInsecure           Enable fallback tiers when Tier 1 (verified LDAPS) fails:'
+        '                             Tier 2: LDAPS 636 with cert bypass'
+        '                             Tier 3: LDAP  389 with Kerberos sign+seal'
+        ''
+        'ANALYSIS SWITCHES'
+        '  -ResolveNested           Flatten nested group memberships (recursive)'
+        '  -DetectStale             Flag disabled and inactive accounts'
+        '  -FuzzyMatch              Cross-domain fuzzy group name matching (Levenshtein)'
+        '  -AnalyzeGaps             Migration gap analysis + Change Requests (needs -FuzzyMatch)'
+        '  -AppMappingCsv <path>    Optional app-to-group readiness mapping'
+        '  -StaleDays <n>           Override stale threshold (default: config value, 90)'
+        ''
+        'OUTPUT / CACHE'
+        '  -OutputPath <dir>        Output directory for reports (default: ./Output)'
+        '  -CachePath <path>        Cache file (for -FromCache) or directory (for writes)'
+        '  -FromCache               Skip LDAP; regenerate reports from a saved cache'
+        '  -JsonOnly                Write JSON cache only, skip HTML report'
+        '  -NoCache                 Skip writing the JSON cache'
+        '  -Theme dark|light        Initial HTML theme (default: dark)'
+        '  -ConfigPath <path>       Override config file location'
+        '  -SendEmail               Send the migration report via SMTP (config must enable this)'
+        ''
+        'EXAMPLES'
+        ''
+        '  # Simplest single-domain inventory (V1 report)'
+        "  .\$self -CsvPath .\groups.csv"
+        ''
+        '  # Single-domain with nested resolution + stale detection'
+        "  .\$self -CsvPath .\groups.csv -ResolveNested -DetectStale"
+        ''
+        '  # Cross-domain fuzzy match, verified LDAPS only'
+        "  .\$self -CsvPath .\groups.csv -FuzzyMatch"
+        ''
+        '  # Full two-forest migration readiness pipeline with fallback tiers'
+        "  .\$self -CsvPath .\groups.csv -FuzzyMatch -AnalyzeGaps -DetectStale -ResolveNested -AllowInsecure"
+        ''
+        '  # Offline re-render from a saved cache (no AD access)'
+        "  .\$self -CsvPath .\groups.csv -FromCache -CachePath .\Cache\groups-20260415-103821.json"
+        ''
+        '  # With explicit credentials'
+        '  $cred = Get-Credential'
+        "  .\$self -CsvPath .\groups.csv -FuzzyMatch -Credential `$cred"
+        ''
+        'MORE'
+        "  Full parameter docs:  Get-Help .\$self -Detailed"
+        '  Quick start:          docs/QUICKSTART.md'
+        '  Developer notes:      docs/DEV-GUIDE.md'
+        ''
+    )
+    $lines | ForEach-Object { Write-Host $_ }
+}
+
+if ($Help -or -not $CsvPath) {
+    Show-Usage
+    if (-not $Help -and -not $CsvPath) {
+        Write-Host 'ERROR: -CsvPath is required.' -ForegroundColor Red
+        exit 2
+    }
+    exit 0
+}
+
+# ---------------------------------------------------------------------------
 # Resolve config path default
 # ---------------------------------------------------------------------------
 if (-not $ConfigPath) {
@@ -184,6 +302,7 @@ if (-not $ConfigPath) {
 Write-Host 'Loading modules...' -ForegroundColor Cyan
 
 $moduleFiles = @(
+    'ADLdap.ps1',
     'GroupEnumLogger.ps1',
     'GroupEnumerator.ps1',
     'FuzzyMatcher.ps1',
@@ -215,6 +334,7 @@ Write-Host ''
 # ---------------------------------------------------------------------------
 # Main execution
 # ---------------------------------------------------------------------------
+$connectionPool = $null
 try {
     # ---- Load configuration ----
     Write-Host 'Loading configuration...' -ForegroundColor Cyan
@@ -364,7 +484,17 @@ try {
         $groupList = Import-GroupList -CsvPath $CsvPath
 
         if (-not $groupList -or $groupList.Count -eq 0) {
-            Write-Warning 'No groups found in CSV. Nothing to enumerate.'
+            Write-Warning @"
+No groups found in CSV '$CsvPath'. Nothing to enumerate.
+
+Check that the file:
+  - has a header row (Domain,GroupName  OR  Group)
+  - has at least one non-blank data row
+  - uses DOMAIN\GroupName values if using the single-column 'Group' format
+
+Sample files: Templates\groups-example-standard.csv
+              Templates\groups-example-backslash.csv
+"@
             exit 0
         }
 
@@ -390,6 +520,16 @@ try {
         $totalProcessed = 0
         $totalInList    = $groupList.Count
 
+        # Shared connection pool: one LdapConnection per domain, reused across
+        # all groups in that domain. Also enables cross-forest member routing
+        # and ForeignSecurityPrincipal SID resolution between pooled domains.
+        $poolParams = @{
+            AllowInsecure  = [bool]$config.AllowInsecure
+            TimeoutSeconds = [int]$config.LdapTimeout
+        }
+        if ($Credential) { $poolParams.Credential = $Credential }
+        $connectionPool = New-AdLdapConnectionPool @poolParams
+
         foreach ($entry in $groupList) {
             $totalProcessed++
             $progressPct = [int](($totalProcessed / $totalInList) * 100)
@@ -397,9 +537,10 @@ try {
 
             try {
                 $enumParams = @{
-                    Domain    = $entry.Domain
-                    GroupName = $entry.GroupName
-                    Config    = $config
+                    Domain         = $entry.Domain
+                    GroupName      = $entry.GroupName
+                    Config         = $config
+                    ConnectionPool = $connectionPool
                 }
                 if ($Credential) {
                     $enumParams.Credential = $Credential
@@ -532,12 +673,18 @@ try {
         $nestedUsersTotal = 0
 
         foreach ($groupResult in $groupResults) {
-            if ($groupResult.Data.Skipped -or $groupResult.Errors.Count -gt 0) { continue }
+            # Filter out benign tier-downgrade warnings (string-prefixed
+            # "WARNING: Using tier ...") before deciding whether to skip.
+            # They indicate successful enumeration via a fallback tier, not a
+            # real error, and downstream processing should still run.
+            $fatalErrs = @($groupResult.Errors | Where-Object { $_ -notlike 'WARNING: Using tier*' })
+            if ($groupResult.Data.Skipped -or $fatalErrs.Count -gt 0) { continue }
 
             $nestedParams = @{
-                Domain    = $groupResult.Data.Domain
-                GroupName = $groupResult.Data.GroupName
-                Config    = $config
+                Domain         = $groupResult.Data.Domain
+                GroupName      = $groupResult.Data.GroupName
+                Config         = $config
+                ConnectionPool = $connectionPool
             }
             if ($Credential) { $nestedParams.Credential = $Credential }
 
@@ -586,7 +733,12 @@ try {
         $staleTotalFlag = 0
 
         foreach ($groupResult in $groupResults) {
-            if ($groupResult.Data.Skipped -or $groupResult.Errors.Count -gt 0) { continue }
+            # Filter out benign tier-downgrade warnings (string-prefixed
+            # "WARNING: Using tier ...") before deciding whether to skip.
+            # They indicate successful enumeration via a fallback tier, not a
+            # real error, and downstream processing should still run.
+            $fatalErrs = @($groupResult.Errors | Where-Object { $_ -notlike 'WARNING: Using tier*' })
+            if ($groupResult.Data.Skipped -or $fatalErrs.Count -gt 0) { continue }
             if (-not $groupResult.Data.Members -or $groupResult.Data.Members.Count -eq 0) { continue }
 
             $staleKey = "$($groupResult.Data.Domain)|$($groupResult.Data.GroupName)"
@@ -596,9 +748,10 @@ try {
             $staleConfig.StaleAccountDays = $staleDays
 
             $staleParams = @{
-                Members = $groupResult.Data.Members
-                Domain  = $groupResult.Data.Domain
-                Config  = $staleConfig
+                Members        = $groupResult.Data.Members
+                Domain         = $groupResult.Data.Domain
+                Config         = $staleConfig
+                ConnectionPool = $connectionPool
             }
             if ($Credential) { $staleParams.Credential = $Credential }
 
@@ -681,9 +834,9 @@ try {
                 $totalLowConf    += $corrResult.Summary.LowConfidence
 
             } catch {
-                Write-Warning "User correlation failed for pair $corrKey: $_"
+                Write-Warning "User correlation failed for pair ${corrKey}: $_"
                 Write-GroupEnumLog -Level 'ERROR' -Operation 'UserCorrelation' `
-                    -Message "User correlation failed for pair $corrKey: $_" `
+                    -Message "User correlation failed for pair ${corrKey}: $_" `
                     -Context @{ corrKey = $corrKey; error = $_.ToString() }
             }
         }
@@ -745,9 +898,9 @@ try {
                 $gapResult   = Get-MigrationGapAnalysis @gapParams
                 $gapResults += $gapResult
             } catch {
-                Write-Warning "Gap analysis failed for pair $corrKey: $_"
+                Write-Warning "Gap analysis failed for pair ${corrKey}: $_"
                 Write-GroupEnumLog -Level 'ERROR' -Operation 'GapAnalysis' `
-                    -Message "Gap analysis failed for pair $corrKey: $_" `
+                    -Message "Gap analysis failed for pair ${corrKey}: $_" `
                     -Context @{ corrKey = $corrKey; error = $_.ToString() }
             }
         }
@@ -779,14 +932,11 @@ try {
     if ($MigratingTo -and $gapResults.Count -gt 0) {
         Write-Host "Resolving domain existence in '$MigratingTo'..." -ForegroundColor Cyan
 
-        # Determine SearchBase: explicit param > auto-detect > domain root
         $resolvedSearchBase = $TargetSearchBase
 
         if (-not $resolvedSearchBase) {
-            # Try to detect the current user's OU as a suggestion
             Write-Host '  No -TargetSearchBase provided. Detecting current user OU...' -ForegroundColor Gray
             $ouDetect = Get-CurrentUserOU -Domain $MigratingTo -Credential $Credential -Config $config
-
             if ($ouDetect.Detected -and $ouDetect.ParentOU) {
                 Write-Host "  Detected your OU: $($ouDetect.ParentOU)" -ForegroundColor Cyan
                 $useDetected = Read-Host "  Use this OU as SearchBase? [Y/n]"
@@ -794,85 +944,77 @@ try {
                     $resolvedSearchBase = $ouDetect.ParentOU
                     Write-Host "  Using detected OU: $resolvedSearchBase" -ForegroundColor Green
                 } else {
-                    Write-Host '  Searching from domain root (may be slower for large domains)' -ForegroundColor Yellow
+                    Write-Host '  Searching from domain root (may be slower)' -ForegroundColor Yellow
                 }
             } else {
                 Write-Host "  Could not detect user OU: $($ouDetect.Error)" -ForegroundColor Yellow
                 Write-Host '  Searching from domain root' -ForegroundColor Yellow
             }
-
-            Write-GroupEnumLog -Level 'INFO' -Operation 'SearchBaseDetect' `
-                -Message "SearchBase detection: $(if ($resolvedSearchBase) { $resolvedSearchBase } else { 'domain root' })" `
-                -Context @{
-                    detected  = $ouDetect.Detected
-                    parentOU  = $ouDetect.ParentOU
-                    userDN    = $ouDetect.UserDN
-                    resolved  = $(if ($resolvedSearchBase) { $resolvedSearchBase } else { '(domain root)' })
-                }
         }
 
-        # Validate SearchBase if one is set
         if ($resolvedSearchBase) {
-            Write-Host "  Validating SearchBase: $resolvedSearchBase" -ForegroundColor Gray
             $sbCheck = Test-SearchBaseExists -Domain $MigratingTo -SearchBase $resolvedSearchBase `
                 -Credential $Credential -Config $config
-
             if (-not $sbCheck.Exists) {
                 Write-Host "  SearchBase NOT FOUND: $resolvedSearchBase" -ForegroundColor Red
-                if ($sbCheck.Error) {
-                    Write-Host "  Error: $($sbCheck.Error)" -ForegroundColor Red
-                }
-                $continueChoice = Read-Host '  SearchBase not found. Continue searching from domain root instead? [Y/n]'
+                $continueChoice = Read-Host '  Continue searching from domain root instead? [Y/n]'
                 if (-not $continueChoice -or $continueChoice -imatch '^y') {
-                    Write-Host '  Continuing with domain root search' -ForegroundColor Yellow
                     $resolvedSearchBase = $null
                 } else {
-                    Write-Host '  Skipping domain existence resolution' -ForegroundColor Yellow
-                    $resolvedSearchBase = $null
-                    $MigratingTo = $null  # Skip the resolution
+                    $MigratingTo = $null
                 }
-
-                Write-GroupEnumLog -Level 'WARN' -Operation 'SearchBaseValidation' `
-                    -Message "SearchBase '$($sbCheck.DN)' not found: $($sbCheck.Error)" `
-                    -Context @{ searchBase = $sbCheck.DN; error = $sbCheck.Error }
             } else {
-                Write-Host "  SearchBase validated successfully" -ForegroundColor Green
+                Write-Host '  SearchBase validated' -ForegroundColor Green
             }
         }
 
-        # Run domain existence resolution
         if ($MigratingTo) {
-            $notProvCount = ($gapResults | ForEach-Object { $_.Items } |
+            $notProvCount = @($gapResults | ForEach-Object { $_.Items } |
                 Where-Object { $_.Status -eq 'NotProvisioned' }).Count
-
             if ($notProvCount -gt 0) {
                 Write-Host "  Searching target domain for $notProvCount unmatched user(s)..." -ForegroundColor Gray
-
-                $gapResults = Resolve-DomainExistence `
-                    -GapResults       $gapResults `
-                    -TargetDomain     $MigratingTo `
-                    -TargetSearchBase $resolvedSearchBase `
-                    -Credential       $Credential `
-                    -Config           $config
-
-                # Count reclassifications
-                $existsCount = ($gapResults | ForEach-Object { $_.Items } |
-                    Where-Object { $_.Status -eq 'ExistsNotInGroup' }).Count
-                $notInDomCount = ($gapResults | ForEach-Object { $_.Items } |
-                    Where-Object { $_.Status -eq 'NotInDomain' }).Count
-
-                Write-Host "  Results: $existsCount exist in domain (need group add), $notInDomCount not in domain (need provisioning)" -ForegroundColor Gray
-
-                # Recalculate overall readiness with updated gap results
-                $overallReadiness = Get-OverallMigrationReadiness -GapResults $gapResults `
-                    -AppReadiness $null
+                $gapResults = Resolve-DomainExistence -GapResults $gapResults `
+                    -TargetDomain $MigratingTo -TargetSearchBase $resolvedSearchBase `
+                    -Credential $Credential -Config $config
+                $existsCount = @($gapResults | ForEach-Object { $_.Items } | Where-Object { $_.Status -eq 'ExistsNotInGroup' }).Count
+                $notInDomCount = @($gapResults | ForEach-Object { $_.Items } | Where-Object { $_.Status -eq 'NotInDomain' }).Count
+                Write-Host "  Results: $existsCount exist in domain, $notInDomCount not in domain" -ForegroundColor Gray
+                $overallReadiness = Get-OverallMigrationReadiness -GapResults $gapResults
                 Write-Host "  Updated readiness: $($overallReadiness.OverallPercent)%" -ForegroundColor Gray
             } else {
                 Write-Host '  No NotProvisioned users to search for' -ForegroundColor Gray
             }
-
             Write-Host ''
         }
+    }
+
+    # ---- Step 4c: Membership Drift Detection ----
+    $driftResult = $null
+    if (($BaselinePath -or $PreviousRunPath) -and $groupResults.Count -gt 0) {
+        Write-Host 'Detecting membership drift...' -ForegroundColor Cyan
+        $resolvedPreviousPath = $PreviousRunPath
+        if (-not $resolvedPreviousPath -and -not $FromCache) {
+            $resolvedPreviousPath = Get-LatestCacheFile -CacheDirectory $cacheDir -ExcludePath $resolvedCachePath
+            if ($resolvedPreviousPath) {
+                Write-Host "  Auto-detected previous run: $resolvedPreviousPath" -ForegroundColor Gray
+            }
+        }
+        $driftResult = Get-MembershipDrift -CurrentGroupResults $groupResults `
+            -BaselinePath $BaselinePath -PreviousRunPath $resolvedPreviousPath
+        $blSummary = $driftResult.OverallSummary.BaselineComparison
+        $prSummary = $driftResult.OverallSummary.PreviousComparison
+        if ($BaselinePath -and $blSummary.GroupsCompared -gt 0) {
+            Write-Host "  vs Baseline: +$($blSummary.TotalAdded) added, -$($blSummary.TotalRemoved) removed across $($blSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($blSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
+        }
+        if ($resolvedPreviousPath -and $prSummary.GroupsCompared -gt 0) {
+            Write-Host "  vs Previous: +$($prSummary.TotalAdded) added, -$($prSummary.TotalRemoved) removed across $($prSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($prSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
+        }
+        if ($driftResult.FromPrevious.Count -gt 0) {
+            $driftCsvPath = Join-Path $resolvedOutputDir "${csvLeaf}-drift-previous-${timestamp}.csv"
+            $null = Export-DriftReportCsv -DriftResult $driftResult -OutputPath $driftCsvPath -ComparisonType 'Previous'
+            Write-Host "  Drift CSV: $driftCsvPath" -ForegroundColor Gray
+        }
+        Write-Host ''
     }
 
     # ---- Step 5: App Mapping ----
@@ -952,68 +1094,6 @@ try {
                     -Message "CR summary export failed: $_" -Context @{ error = $_.ToString() }
                 $crText = ''
             }
-        }
-
-        # Export app readiness CSV if app mapping was provided
-        if ($appReadiness -and $appReadiness.Apps.Count -gt 0) {
-            $appCsvFileName = "${csvLeaf}-app-readiness-${timestamp}.csv"
-            $appCsvPath     = Join-Path $resolvedOutputDir $appCsvFileName
-            try {
-                $null = Export-AppReadinessCsv -AppReadiness $appReadiness -OutputPath $appCsvPath
-                Write-Host "  App readiness CSV: $appCsvPath" -ForegroundColor Gray
-                Write-GroupEnumLog -Level 'INFO' -Operation 'ExportCsv' `
-                    -Message "App readiness CSV exported" -Context @{ path = $appCsvPath }
-            } catch {
-                Write-Warning "Failed to export app readiness CSV: $_"
-            }
-        }
-
-        Write-Host ''
-    }
-
-    # ---- Step 7: Membership Drift Detection ----
-    $driftResult = $null
-
-    $runDrift = ($BaselinePath -or $PreviousRunPath) -and $groupResults.Count -gt 0
-
-    if ($runDrift) {
-        Write-Host 'Detecting membership drift...' -ForegroundColor Cyan
-
-        # Auto-detect previous run if not specified
-        $resolvedPreviousPath = $PreviousRunPath
-        if (-not $resolvedPreviousPath -and -not $FromCache) {
-            $resolvedPreviousPath = Get-LatestCacheFile -CacheDirectory $cacheDir -ExcludePath $resolvedCachePath
-            if ($resolvedPreviousPath) {
-                Write-Host "  Auto-detected previous run: $resolvedPreviousPath" -ForegroundColor Gray
-            }
-        }
-
-        $driftResult = Get-MembershipDrift `
-            -CurrentGroupResults $groupResults `
-            -BaselinePath        $BaselinePath `
-            -PreviousRunPath     $resolvedPreviousPath
-
-        # Show summary
-        $blSummary = $driftResult.OverallSummary.BaselineComparison
-        $prSummary = $driftResult.OverallSummary.PreviousComparison
-
-        if ($BaselinePath -and $blSummary.GroupsCompared -gt 0) {
-            Write-Host "  vs Baseline: +$($blSummary.TotalAdded) added, -$($blSummary.TotalRemoved) removed across $($blSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($blSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
-        }
-        if ($resolvedPreviousPath -and $prSummary.GroupsCompared -gt 0) {
-            Write-Host "  vs Previous: +$($prSummary.TotalAdded) added, -$($prSummary.TotalRemoved) removed across $($prSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($prSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
-        }
-
-        # Export drift CSV
-        if ($driftResult.FromPrevious.Count -gt 0) {
-            $driftCsvPath = Join-Path $resolvedOutputDir "${csvLeaf}-drift-previous-${timestamp}.csv"
-            $null = Export-DriftReportCsv -DriftResult $driftResult -OutputPath $driftCsvPath -ComparisonType 'Previous'
-            Write-Host "  Drift CSV (vs previous): $driftCsvPath" -ForegroundColor Gray
-        }
-        if ($driftResult.FromBaseline.Count -gt 0 -and $BaselinePath) {
-            $driftBlCsvPath = Join-Path $resolvedOutputDir "${csvLeaf}-drift-baseline-${timestamp}.csv"
-            $null = Export-DriftReportCsv -DriftResult $driftResult -OutputPath $driftBlCsvPath -ComparisonType 'Baseline'
-            Write-Host "  Drift CSV (vs baseline): $driftBlCsvPath" -ForegroundColor Gray
         }
 
         Write-Host ''
@@ -1110,8 +1190,8 @@ try {
     # =========================================================================
     $enumerated   = @($groupResults | Where-Object { -not $_.Data.Skipped })
     $skippedFinal = @($groupResults | Where-Object { $_.Data.Skipped })
-    $totalMembers = ($enumerated | Measure-Object -Property { $_.Data.MemberCount } -Sum).Sum
-    if (-not $totalMembers) { $totalMembers = 0 }
+    $totalMembers = 0
+    foreach ($e in $enumerated) { $totalMembers += [int]$e.Data.MemberCount }
     $errGroups    = @($groupResults | Where-Object { $_.Errors.Count -gt 0 })
 
     Write-Host '========================================' -ForegroundColor Cyan
@@ -1228,4 +1308,8 @@ try {
         }
     $null = Close-GroupEnumLog -Summary @{ fatalError = $_.ToString() }
     exit 1
+} finally {
+    if ($connectionPool) {
+        try { Close-AdLdapConnectionPool $connectionPool } catch { }
+    }
 }

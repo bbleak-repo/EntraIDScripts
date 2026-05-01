@@ -182,7 +182,22 @@ param(
     [switch]$SendEmail,
 
     [Parameter(Mandatory = $false)]
-    [int]$StaleDays = 0
+    [int]$StaleDays = 0,
+
+    [Parameter(Mandatory = $false)]
+    [string]$MigratingTo,
+
+    [Parameter(Mandatory = $false)]
+    [string]$TargetSearchBase,
+
+    [Parameter(Mandatory = $false)]
+    [string[]]$IncludeAttributes = @(),
+
+    [Parameter(Mandatory = $false)]
+    [string]$BaselinePath,
+
+    [Parameter(Mandatory = $false)]
+    [string]$PreviousRunPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -298,7 +313,9 @@ $moduleFiles = @(
     'StaleAccountDetector.ps1',
     'AppMapping.ps1',
     'MigrationReportGenerator.ps1',
-    'EmailSummary.ps1'
+    'EmailSummary.ps1',
+    'DomainUserLookup.ps1',
+    'MembershipDrift.ps1'
 )
 
 foreach ($moduleFile in $moduleFiles) {
@@ -527,6 +544,9 @@ Sample files: Templates\groups-example-standard.csv
                 }
                 if ($Credential) {
                     $enumParams.Credential = $Credential
+                }
+                if ($IncludeAttributes.Count -gt 0) {
+                    $enumParams.IncludeAttributes = $IncludeAttributes
                 }
 
                 $result = Get-GroupMembers @enumParams
@@ -906,6 +926,95 @@ Sample files: Templates\groups-example-standard.csv
                 overallPercent   = $(if ($overallReadiness) { $overallReadiness.OverallPercent } else { 0 })
                 totalCRItems     = $(if ($overallReadiness) { $overallReadiness.TotalCRItems }   else { 0 })
             }
+    }
+
+    # ---- Step 4b: Domain Existence Resolution (-MigratingTo) ----
+    if ($MigratingTo -and $gapResults.Count -gt 0) {
+        Write-Host "Resolving domain existence in '$MigratingTo'..." -ForegroundColor Cyan
+
+        $resolvedSearchBase = $TargetSearchBase
+
+        if (-not $resolvedSearchBase) {
+            Write-Host '  No -TargetSearchBase provided. Detecting current user OU...' -ForegroundColor Gray
+            $ouDetect = Get-CurrentUserOU -Domain $MigratingTo -Credential $Credential -Config $config
+            if ($ouDetect.Detected -and $ouDetect.ParentOU) {
+                Write-Host "  Detected your OU: $($ouDetect.ParentOU)" -ForegroundColor Cyan
+                $useDetected = Read-Host "  Use this OU as SearchBase? [Y/n]"
+                if (-not $useDetected -or $useDetected -imatch '^y') {
+                    $resolvedSearchBase = $ouDetect.ParentOU
+                    Write-Host "  Using detected OU: $resolvedSearchBase" -ForegroundColor Green
+                } else {
+                    Write-Host '  Searching from domain root (may be slower)' -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "  Could not detect user OU: $($ouDetect.Error)" -ForegroundColor Yellow
+                Write-Host '  Searching from domain root' -ForegroundColor Yellow
+            }
+        }
+
+        if ($resolvedSearchBase) {
+            $sbCheck = Test-SearchBaseExists -Domain $MigratingTo -SearchBase $resolvedSearchBase `
+                -Credential $Credential -Config $config
+            if (-not $sbCheck.Exists) {
+                Write-Host "  SearchBase NOT FOUND: $resolvedSearchBase" -ForegroundColor Red
+                $continueChoice = Read-Host '  Continue searching from domain root instead? [Y/n]'
+                if (-not $continueChoice -or $continueChoice -imatch '^y') {
+                    $resolvedSearchBase = $null
+                } else {
+                    $MigratingTo = $null
+                }
+            } else {
+                Write-Host '  SearchBase validated' -ForegroundColor Green
+            }
+        }
+
+        if ($MigratingTo) {
+            $notProvCount = @($gapResults | ForEach-Object { $_.Items } |
+                Where-Object { $_.Status -eq 'NotProvisioned' }).Count
+            if ($notProvCount -gt 0) {
+                Write-Host "  Searching target domain for $notProvCount unmatched user(s)..." -ForegroundColor Gray
+                $gapResults = Resolve-DomainExistence -GapResults $gapResults `
+                    -TargetDomain $MigratingTo -TargetSearchBase $resolvedSearchBase `
+                    -Credential $Credential -Config $config
+                $existsCount = @($gapResults | ForEach-Object { $_.Items } | Where-Object { $_.Status -eq 'ExistsNotInGroup' }).Count
+                $notInDomCount = @($gapResults | ForEach-Object { $_.Items } | Where-Object { $_.Status -eq 'NotInDomain' }).Count
+                Write-Host "  Results: $existsCount exist in domain, $notInDomCount not in domain" -ForegroundColor Gray
+                $overallReadiness = Get-OverallMigrationReadiness -GapResults $gapResults
+                Write-Host "  Updated readiness: $($overallReadiness.OverallPercent)%" -ForegroundColor Gray
+            } else {
+                Write-Host '  No NotProvisioned users to search for' -ForegroundColor Gray
+            }
+            Write-Host ''
+        }
+    }
+
+    # ---- Step 4c: Membership Drift Detection ----
+    $driftResult = $null
+    if (($BaselinePath -or $PreviousRunPath) -and $groupResults.Count -gt 0) {
+        Write-Host 'Detecting membership drift...' -ForegroundColor Cyan
+        $resolvedPreviousPath = $PreviousRunPath
+        if (-not $resolvedPreviousPath -and -not $FromCache) {
+            $resolvedPreviousPath = Get-LatestCacheFile -CacheDirectory $cacheDir -ExcludePath $resolvedCachePath
+            if ($resolvedPreviousPath) {
+                Write-Host "  Auto-detected previous run: $resolvedPreviousPath" -ForegroundColor Gray
+            }
+        }
+        $driftResult = Get-MembershipDrift -CurrentGroupResults $groupResults `
+            -BaselinePath $BaselinePath -PreviousRunPath $resolvedPreviousPath
+        $blSummary = $driftResult.OverallSummary.BaselineComparison
+        $prSummary = $driftResult.OverallSummary.PreviousComparison
+        if ($BaselinePath -and $blSummary.GroupsCompared -gt 0) {
+            Write-Host "  vs Baseline: +$($blSummary.TotalAdded) added, -$($blSummary.TotalRemoved) removed across $($blSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($blSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
+        }
+        if ($resolvedPreviousPath -and $prSummary.GroupsCompared -gt 0) {
+            Write-Host "  vs Previous: +$($prSummary.TotalAdded) added, -$($prSummary.TotalRemoved) removed across $($prSummary.GroupsWithChanges) group(s)" -ForegroundColor $(if ($prSummary.GroupsWithChanges -gt 0) { 'Yellow' } else { 'Gray' })
+        }
+        if ($driftResult.FromPrevious.Count -gt 0) {
+            $driftCsvPath = Join-Path $resolvedOutputDir "${csvLeaf}-drift-previous-${timestamp}.csv"
+            $null = Export-DriftReportCsv -DriftResult $driftResult -OutputPath $driftCsvPath -ComparisonType 'Previous'
+            Write-Host "  Drift CSV: $driftCsvPath" -ForegroundColor Gray
+        }
+        Write-Host ''
     }
 
     # ---- Step 5: App Mapping ----

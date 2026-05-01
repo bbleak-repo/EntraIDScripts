@@ -9,8 +9,8 @@
 
     CSV format for app mapping:
         AppName,SourceGroup,TargetGroup,Notes
-        App1,GG_Sales_Users,USV_Sales_Users,IdP initiated
-        App2,GG_ITSM_Team,USV_ITSM_Team,SP initiated
+        Salesforce,GG_Sales_Users,USV_Sales_Users,IdP initiated
+        ServiceNow,GG_ITSM_Team,USV_ITSM_Team,SP initiated
 
     Status thresholds:
         Ready       - 100% readiness
@@ -85,7 +85,7 @@ function Import-AppMapping {
 
         Expected CSV format (header row required):
             AppName,SourceGroup,TargetGroup,Notes
-            App1,GG_Sales_Users,USV_Sales_Users,IdP initiated
+            Salesforce,GG_Sales_Users,USV_Sales_Users,IdP initiated
 
     .PARAMETER CsvPath
         Path to the application mapping CSV file.
@@ -182,7 +182,7 @@ function Get-AppReadiness {
         @{
             Apps    = @(
                 @{
-                    AppName          = "App1"
+                    AppName          = "Salesforce"
                     SourceGroup      = "GG_Sales_Users"
                     TargetGroup      = "USV_Sales_Users"
                     ReadinessPercent = 85.0
