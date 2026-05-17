@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Microsoft Lighthouse - Risk Assessment, Compliance &amp; Breach Case Studies</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-surface: #161b22;
+    --bg-elevated: #1c2129;
+    --border-color: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-yellow: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-orange: #d18616;
+    --risk-critical: #da3633;
+    --risk-high: #f85149;
+    --risk-medium: #d29922;
+    --risk-low: #3fb950;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif; background: var(--bg-primary); color: var(--text-primary); line-height: 1.6; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px 60px; }
+  header { background: linear-gradient(135deg, #1a0d0d 0%, #2d1117 50%, #0d1117 100%); border-bottom: 3px solid var(--accent-red); padding: 40px 24px; text-align: center; }
+  header h1 { font-size: 2rem; font-weight: 700; margin-bottom: 8px; }
+  header .subtitle { color: var(--text-secondary); font-size: 1.1rem; }
+  header .meta { color: var(--text-muted); font-size: 0.85rem; margin-top: 12px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .badge-risk { background: #3d1117; color: var(--accent-red); }
+  h2 { font-size: 1.5rem; font-weight: 600; margin: 40px 0 20px; padding-bottom: 8px; border-bottom: 2px solid var(--border-color); color: var(--accent-red); }
+  h3 { font-size: 1.15rem; font-weight: 600; margin: 24px 0 12px; }
+  h4 { font-size: 1rem; font-weight: 600; margin: 16px 0 8px; color: var(--accent-blue); }
+  p.desc { color: var(--text-secondary); margin-bottom: 16px; font-size: 0.95rem; }
+  .card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 24px; margin: 16px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9rem; }
+  th { background: var(--bg-elevated); text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border-color); font-weight: 600; color: var(--accent-red); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); }
+  tr:hover td { background: rgba(248, 81, 73, 0.04); }
+
+  .risk-badge { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; }
+  .risk-critical { background: rgba(218, 54, 51, 0.2); color: var(--risk-critical); }
+  .risk-high { background: rgba(248, 81, 73, 0.2); color: var(--risk-high); }
+  .risk-medium { background: rgba(210, 153, 34, 0.2); color: var(--risk-medium); }
+  .risk-low { background: rgba(63, 185, 80, 0.2); color: var(--risk-low); }
+
+  /* Breach timeline cards */
+  .breach-timeline { position: relative; padding-left: 40px; }
+  .breach-timeline::before { content: ''; position: absolute; left: 15px; top: 0; bottom: 0; width: 2px; background: var(--border-color); }
+  .breach-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 24px; margin: 20px 0; position: relative; }
+  .breach-card::before { content: ''; position: absolute; left: -33px; top: 28px; width: 12px; height: 12px; border-radius: 50%; border: 2px solid; }
+  .breach-card.critical::before { border-color: var(--risk-critical); background: var(--risk-critical); }
+  .breach-card.high::before { border-color: var(--risk-high); background: var(--risk-high); }
+  .breach-header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .breach-title { font-size: 1.15rem; font-weight: 700; color: var(--text-primary); }
+  .breach-date { font-size: 0.85rem; color: var(--text-muted); }
+  .breach-meta { display: flex; flex-wrap: wrap; gap: 16px; margin: 12px 0; font-size: 0.85rem; }
+  .breach-meta span { color: var(--text-secondary); }
+  .breach-meta strong { color: var(--text-primary); }
+  .breach-body { color: var(--text-secondary); font-size: 0.9rem; }
+  .breach-relevance { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-color); font-size: 0.85rem; color: var(--accent-blue); }
+
+  /* Phase cards */
+  .phase-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin: 16px 0; }
+  .phase-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; border-top: 3px solid; }
+  .phase-card.p1 { border-top-color: var(--accent-red); }
+  .phase-card.p2 { border-top-color: var(--accent-orange); }
+  .phase-card.p3 { border-top-color: var(--accent-yellow); }
+  .phase-card.p4 { border-top-color: var(--accent-green); }
+  .phase-time { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 8px; }
+  .phase-card h4 { margin: 0 0 8px; }
+  .phase-card ul { padding-left: 18px; color: var(--text-secondary); font-size: 0.85rem; }
+  .phase-card li { margin: 4px 0; }
+
+  .alert { border-radius: 8px; padding: 16px 20px; margin: 16px 0; border-left: 4px solid; }
+  .alert-red { background: rgba(248, 81, 73, 0.08); border-color: var(--accent-red); }
+  .alert-yellow { background: rgba(210, 153, 34, 0.08); border-color: var(--accent-yellow); }
+  .alert-title { font-weight: 700; margin-bottom: 4px; }
+  .alert-red .alert-title { color: var(--accent-red); }
+  .alert-yellow .alert-title { color: var(--accent-yellow); }
+  .alert p { color: var(--text-secondary); font-size: 0.9rem; }
+
+  @media (max-width: 768px) {
+    header h1 { font-size: 1.5rem; }
+    .breach-timeline { padding-left: 24px; }
+    .breach-card::before { left: -17px; }
+    .breach-timeline::before { left: 7px; }
+  }
+  @media print {
+    body { background: #fff; color: #111; }
+    .card, .breach-card, .phase-card { background: #f8f8f8; border-color: #ddd; }
+    header { background: #f0f0f0; border-color: #333; }
+    h2, h3, h4, header h1 { color: #111; }
+    th { background: #e8e8e8; color: #111; }
+    td { color: #444; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div style="margin-bottom:8px;"><span class="badge badge-risk">Risk Assessment</span></div>
+  <h1>Risk Assessment, Compliance &amp; Breach Case Studies</h1>
+  <div class="subtitle">Microsoft Lighthouse / GDAP -- MSP Supply Chain Security</div>
+  <div class="meta">Prepared 2026-03-30 | Cybersecurity Risk Perspective</div>
+</header>
+
+<div class="container">
+
+<!-- ==================== SECTION 1: THREAT LANDSCAPE ==================== -->
+<h2>1. Threat Landscape</h2>
+<p class="desc">Managed Service Providers occupy a uniquely dangerous position in the modern threat landscape. They hold privileged access to dozens, hundreds, or thousands of customer tenants simultaneously. A single compromised MSP credential is not equivalent to a single compromised enterprise account -- it is a key that opens many locks.</p>
+
+<div class="card">
+  <h4>The Multiplicative Risk Problem</h4>
+  <p style="color:var(--text-secondary); font-size:0.9rem; margin-bottom:16px;">CISA Advisory AA22-131A (May 2022) documented the pattern: when a target has a mature security posture, attackers find it easier to first compromise the MSP serving that target, then pivot through delegated access. The MSP is not the ultimate target -- it is the attack path.</p>
+  <table>
+    <tr><th>Threat Actor Category</th><th>Motivation</th><th>Example</th></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">Nation-State (APT)</td><td>Espionage, supply chain infiltration</td><td>NOBELIUM / Russian SVR (2021)</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">Ransomware Groups</td><td>Financial extortion at scale</td><td>REvil via Kaseya (2021), Black Basta via ConnectWise (2024)</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">Insider Threat</td><td>Disgruntled employee, credential theft</td><td>BerryDunn/Reliable Networks (2023)</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 2: BREACH CASE STUDIES ==================== -->
+<h2>2. Breach Case Studies</h2>
+
+<div class="breach-timeline">
+
+  <div class="breach-card critical">
+    <div class="breach-header">
+      <div>
+        <div class="breach-title">SolarWinds SUNBURST</div>
+        <div class="breach-date">Discovered December 2020 | Active since March 2020</div>
+      </div>
+      <span class="risk-badge risk-critical">NATION-STATE</span>
+    </div>
+    <div class="breach-meta">
+      <span>Attacker: <strong>NOBELIUM / Russian SVR</strong></span>
+      <span>Vector: <strong>Supply chain (trojanized Orion update)</strong></span>
+      <span>Impact: <strong>~18,000 installations received malicious update</strong></span>
+    </div>
+    <div class="breach-body">
+      <p>The SUNBURST backdoor was inserted into SolarWinds Orion software updates distributed between March and June 2020. The trojanized DLL was signed with SolarWinds' legitimate code-signing certificate. Notable victims included the US Treasury Department, Department of Homeland Security, and multiple federal agencies. The attack demonstrated that trusted vendor/MSP relationships could be weaponized at massive scale.</p>
+    </div>
+    <div class="breach-relevance">MSP Relevance: Demonstrated that the vendor/service provider relationship is a viable and high-value supply chain attack path. Directly motivated Microsoft's GDAP initiative.</div>
+  </div>
+
+  <div class="breach-card critical">
+    <div class="breach-header">
+      <div>
+        <div class="breach-title">Kaseya VSA / REvil Ransomware</div>
+        <div class="breach-date">July 2, 2021</div>
+      </div>
+      <span class="risk-badge risk-critical">RANSOMWARE</span>
+    </div>
+    <div class="breach-meta">
+      <span>Attacker: <strong>REvil ransomware gang</strong></span>
+      <span>Vector: <strong>CVE-2021-30116 (zero-day in Kaseya VSA)</strong></span>
+      <span>Impact: <strong>800-1,500 businesses across ~60 MSPs</strong></span>
+      <span>Ransom: <strong>$70 million demand (largest at the time)</strong></span>
+    </div>
+    <div class="breach-body">
+      <p>REvil exploited a zero-day authentication bypass in Kaseya's VSA remote monitoring platform on the Friday before the US Independence Day weekend. The attack cascaded through approximately 60 MSPs to between 800 and 1,500 downstream businesses. A universal decryptor was obtained on July 23. Coop, Sweden's largest grocery chain, had to close nearly 800 stores due to compromised point-of-sale systems via their MSP.</p>
+    </div>
+    <div class="breach-relevance">MSP Relevance: Direct exploitation of an MSP management platform. Demonstrated the cascading blast radius of MSP compromise. Triggered a re-pricing of cyber insurance for MSPs.</div>
+  </div>
+
+  <div class="breach-card critical">
+    <div class="breach-header">
+      <div>
+        <div class="breach-title">ConnectWise ScreenConnect</div>
+        <div class="breach-date">February 19, 2024</div>
+      </div>
+      <span class="risk-badge risk-critical">MULTI-GROUP</span>
+    </div>
+    <div class="breach-meta">
+      <span>Attackers: <strong>Multiple groups including Black Basta</strong></span>
+      <span>Vector: <strong>CVE-2024-1709 (CVSS 10.0 authentication bypass)</strong></span>
+      <span>Impact: <strong>Widespread exploitation of MSP remote access tool</strong></span>
+    </div>
+    <div class="breach-body">
+      <p>A critical authentication bypass vulnerability (CVSS 10.0) was disclosed in ConnectWise ScreenConnect on February 19, 2024. Mass exploitation began within 24 hours of disclosure. Multiple threat groups including Black Basta leveraged the vulnerability to gain access to MSP-managed endpoints. The simplicity of exploitation (crafted HTTP request) and the widespread deployment of ScreenConnect made this one of the most rapidly exploited MSP vulnerabilities on record.</p>
+    </div>
+    <div class="breach-relevance">MSP Relevance: MSP remote management tooling as a direct attack surface. Speed of exploitation (hours, not days) emphasizes the need for rapid patching and network segmentation of management tools.</div>
+  </div>
+
+  <div class="breach-card high" style="border-left: 2px solid var(--accent-orange);">
+    <div class="breach-header">
+      <div>
+        <div class="breach-title">BerryDunn / Reliable Networks</div>
+        <div class="breach-date">September 2023</div>
+      </div>
+      <span class="risk-badge risk-high">LIABILITY PRECEDENT</span>
+    </div>
+    <div class="breach-meta">
+      <span>Attacker: <strong>Unknown threat actor</strong></span>
+      <span>Vector: <strong>Compromised MSP (Reliable Networks) credentials</strong></span>
+      <span>Impact: <strong>1.1 million individuals' data exposed</strong></span>
+    </div>
+    <div class="breach-body">
+      <p>BerryDunn, an accounting and consulting firm, suffered a data breach through their managed service provider, Reliable Networks. The breach exposed personal data of approximately 1.1 million individuals. BerryDunn subsequently filed litigation against Reliable Networks, establishing an important legal precedent for MSP liability in data breach scenarios. The case highlighted that contractual liability caps may not protect MSPs from negligence claims.</p>
+    </div>
+    <div class="breach-relevance">MSP Relevance: Legal liability precedent. Demonstrates that customers will pursue MSPs in court for security failures. SOW language, GDAP role alignment, and evidence of security controls become critical for legal defense.</div>
+  </div>
+
+</div>
+
+<!-- ==================== SECTION 3: RISK MATRIX ==================== -->
+<h2>3. Risk Assessment Matrix</h2>
+
+<div class="card" style="overflow-x:auto;">
+  <table>
+    <tr>
+      <th>Risk Scenario</th>
+      <th>Likelihood</th>
+      <th>Impact</th>
+      <th>Rating</th>
+      <th>Primary Mitigation</th>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Compromised MSP technician credential (phishing)</td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td><span class="risk-badge risk-critical">CRITICAL</span></td>
+      <td><span class="risk-badge risk-critical">CRITICAL</span></td>
+      <td>PIM JIT, phishing-resistant MFA, device compliance CA</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Overprivileged GDAP roles (standing Global Admin)</td>
+      <td><span class="risk-badge risk-medium">MEDIUM</span></td>
+      <td><span class="risk-badge risk-critical">CRITICAL</span></td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td>Tier model, no standing GA, PIM approval gates</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Stale GDAP relationships (departed customer)</td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td><span class="risk-badge risk-medium">MEDIUM</span></td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td>Quarterly access reviews, offboarding SOP</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">MSP technician insider threat</td>
+      <td><span class="risk-badge risk-low">LOW</span></td>
+      <td><span class="risk-badge risk-critical">CRITICAL</span></td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td>CyberArk PSM session recording, audit monitoring</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Template-wide JIT blast radius</td>
+      <td><span class="risk-badge risk-medium">MEDIUM</span></td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td>Per-customer GDAP templates, blast radius segmentation</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">VPN bypass of geo-fencing controls</td>
+      <td><span class="risk-badge risk-medium">MEDIUM</span></td>
+      <td><span class="risk-badge risk-medium">MEDIUM</span></td>
+      <td><span class="risk-badge risk-medium">MEDIUM</span></td>
+      <td>Global Secure Access with source IP restoration</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Unmonitored MSP activity (Lighthouse alerts only)</td>
+      <td><span class="risk-badge risk-medium">MEDIUM</span></td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td>Deploy Sentinel with KQL analytics rules</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">PRT theft / pass-the-PRT on MSP device</td>
+      <td><span class="risk-badge risk-low">LOW</span></td>
+      <td><span class="risk-badge risk-critical">CRITICAL</span></td>
+      <td><span class="risk-badge risk-high">HIGH</span></td>
+      <td>TPM 2.0 binding, Credential Guard, token protection</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 4: INCIDENT RESPONSE ==================== -->
+<h2>4. Incident Response Playbook</h2>
+<p class="desc">Structured response for compromised MSP accounts accessing customer tenants via GDAP.</p>
+
+<div class="phase-grid">
+  <div class="phase-card p1">
+    <div class="phase-time">Phase 1: 0-30 Minutes</div>
+    <h4 style="color:var(--accent-red);">Immediate Containment</h4>
+    <ul>
+      <li>Disable compromised account in Entra ID</li>
+      <li>Revoke all active sessions and refresh tokens</li>
+      <li>Remove from ALL GDAP security groups</li>
+      <li>Document: timestamp, account, initial indicators</li>
+      <li>Note: 30-min propagation delay for group changes</li>
+    </ul>
+  </div>
+  <div class="phase-card p2">
+    <div class="phase-time">Phase 2: 30 Min - 4 Hours</div>
+    <h4 style="color:var(--accent-orange);">Investigation</h4>
+    <ul>
+      <li>Query Entra sign-in logs: <code>CrossTenantAccessType = "serviceProvider"</code></li>
+      <li>Query Purview: <code>UserType = 9</code> for compromised user</li>
+      <li>Identify all customer tenants accessed</li>
+      <li>Check for persistence: app registrations, new accounts, modified CA policies</li>
+      <li>Assess blast radius and data exposure</li>
+    </ul>
+  </div>
+  <div class="phase-card p3">
+    <div class="phase-time">Phase 3: Notification</div>
+    <h4 style="color:var(--accent-yellow);">Customer Communication</h4>
+    <ul>
+      <li>GDPR: 72-hour notification window</li>
+      <li>HIPAA: 60-day notification window</li>
+      <li>State breach laws: varies by jurisdiction</li>
+      <li>Template: what happened, what data, remediation steps</li>
+      <li>Coordinate with customer's IR team</li>
+    </ul>
+  </div>
+  <div class="phase-card p4">
+    <div class="phase-time">Phase 4: Remediation</div>
+    <h4 style="color:var(--accent-green);">Recovery &amp; Hardening</h4>
+    <ul>
+      <li>Rotate all credentials and certificates</li>
+      <li>Review and harden all GDAP relationships</li>
+      <li>Implement additional controls identified during investigation</li>
+      <li>Conduct post-incident review</li>
+      <li>Update SOPs based on lessons learned</li>
+    </ul>
+  </div>
+</div>
+
+<div class="alert alert-yellow">
+  <div class="alert-title">30-Minute Propagation Delay</div>
+  <p>After removing a user from GDAP security groups, there is a documented 30-minute window during which access may technically persist due to token caching and group membership propagation delays. Document the exact removal time in your incident record. Use the "Revoke sessions" command in Entra ID in parallel to force token invalidation.</p>
+</div>
+
+<!-- ==================== SECTION 5: COMPLIANCE ==================== -->
+<h2>5. Compliance Framework Mapping</h2>
+
+<h3>SOC 2 Type II</h3>
+<div class="card" style="overflow-x:auto;">
+  <table>
+    <tr><th>Control</th><th>Description</th><th>GDAP/Lighthouse Implementation</th></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">CC6.1</td><td>Logical Access Security</td><td>GDAP per-customer, time-limited, role-specific access controls</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">CC6.2</td><td>Authentication</td><td>Mandatory MFA in partner tenant, phishing-resistant auth strength policies</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">CC6.3</td><td>Authorization</td><td>Three-tier security group model with PIM JIT activation</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">CC6.6</td><td>System Boundaries</td><td>Cross-tenant access settings, B2B inbound/outbound policies</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">CC7.2</td><td>Monitoring</td><td>Entra sign-in logs, Purview UserType 9 filtering, Sentinel analytics</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">CC9.2</td><td>Vendor Risk Management</td><td>GDAP replaces DAP, customer explicit approval, role visibility</td></tr>
+  </table>
+</div>
+
+<h3>ISO 27001:2022</h3>
+<div class="card" style="overflow-x:auto;">
+  <table>
+    <tr><th>Annex A Control</th><th>Description</th><th>Implementation</th></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">A.5.15</td><td>Access Control</td><td>GDAP least privilege role model, per-customer scoping</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">A.5.17</td><td>Authentication Information</td><td>MFA + phishing-resistant methods (FIDO2, WHfB, cert-based)</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">A.5.18</td><td>Access Rights</td><td>PIM eligible vs active assignments, time-bounded activation</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">A.5.19</td><td>Supplier Relationships</td><td>GDAP relationship lifecycle, SOW-aligned role sets</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">A.8.15</td><td>Logging</td><td>Multi-layer audit: Entra + Purview + Partner Center + Sentinel</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">A.8.16</td><td>Monitoring Activities</td><td>Sentinel KQL analytics, Lighthouse alerts, Defender detections</td></tr>
+  </table>
+</div>
+
+<h3>NIST 800-53 Rev 5</h3>
+<div class="card" style="overflow-x:auto;">
+  <table>
+    <tr><th>Control Family</th><th>Key Controls</th><th>Implementation</th></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">AC (Access Control)</td><td>AC-2 Account Mgmt, AC-6 Least Privilege</td><td>GDAP tiered role model, PIM for Groups, no standing GA</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">AU (Audit)</td><td>AU-2 through AU-12</td><td>Entra audit + Purview unified log + Sentinel + Lighthouse</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">IA (Identification/Auth)</td><td>IA-2 Multi-Factor, IA-5 Authenticator Mgmt</td><td>MFA mandatory, phishing-resistant auth strength</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">SA (System Acquisition)</td><td>SA-9 External Services</td><td>GDAP as external service provider access control</td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">SR (Supply Chain)</td><td>SR-1 through SR-12</td><td>NIST 800-161r1 supply chain risk management alignment</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 6: CYBER INSURANCE ==================== -->
+<h2>6. Cyber Insurance Considerations</h2>
+
+<div class="card">
+  <h4>Post-Kaseya Market Reality</h4>
+  <p style="color:var(--text-secondary); font-size:0.9rem; margin-bottom:16px;">The Kaseya incident in July 2021 triggered a significant re-pricing of cyber insurance for MSPs. Underwriters have become increasingly specific about technical security controls, moving from questionnaire-based self-attestation to evidence-based verification.</p>
+
+  <table>
+    <tr><th>Underwriting Question</th><th>GDAP/Lighthouse Evidence</th></tr>
+    <tr>
+      <td style="color:var(--text-primary);">Is MFA enabled for all admin accounts?</td>
+      <td>GDAP mandates MFA in partner tenant. Export CA policy config as evidence.</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Are privileged access controls in place?</td>
+      <td>PIM for Groups with tier model. Export PIM activation logs.</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Is there an audit trail for admin actions?</td>
+      <td>Entra audit logs + Purview UserType 9 + Lighthouse audit. Export samples.</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Is there a documented IR plan?</td>
+      <td>Incident response playbook (see Section 4). Annual testing evidence.</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Are access reviews performed regularly?</td>
+      <td>Quarterly GDAP relationship review. PIM access review campaigns.</td>
+    </tr>
+  </table>
+</div>
+
+<div class="alert alert-red">
+  <div class="alert-title">Trend: Proof Required, Not Self-Attestation</div>
+  <p>Underwriters increasingly require evidence from logging systems and configuration exports -- not checkbox self-attestation. MSPs who cannot demonstrate CA policy configurations, PIM activation logs, and GDAP relationship documentation face coverage denial or substantially elevated premiums. First-party vs. third-party coverage distinction is critical: first-party covers the MSP's own losses; third-party covers liability to customers.</p>
+</div>
+
+<!-- ==================== SECTION 7: REFERENCES ==================== -->
+<h2>7. Regulatory &amp; Advisory References</h2>
+<div class="card">
+  <table>
+    <tr><th>Reference</th><th>Issuer</th><th>Relevance</th></tr>
+    <tr><td style="color:var(--text-primary);">CISA AA22-131A</td><td>CISA / NCSC / ACSC / CCCS / NZ-CERT</td><td>MSP threat advisory -- foundational document</td></tr>
+    <tr><td style="color:var(--text-primary);">NIST SP 800-161r1</td><td>NIST</td><td>Cyber supply chain risk management practices</td></tr>
+    <tr><td style="color:var(--text-primary);">DoD/NSA CSI Cloud Top 10</td><td>DoD / NSA (March 2024)</td><td>Cloud security for managed service providers</td></tr>
+    <tr><td style="color:var(--text-primary);">Microsoft GDAP Documentation</td><td>Microsoft Learn</td><td>Official GDAP architecture and configuration</td></tr>
+    <tr><td style="color:var(--text-primary);">NOBELIUM Threat Analysis</td><td>Microsoft Security Blog</td><td>DAP exploitation by nation-state actors</td></tr>
+  </table>
+</div>
+
+</div>
+
+<footer style="text-align:center; padding:24px; color:var(--text-muted); font-size:0.8rem; border-top:1px solid var(--border-color);">
+  Based on CISA advisories, Microsoft Learn documentation, NIST frameworks, and public breach reporting. Research date: 2026-03-30.
+</footer>
+</body>
+</html>

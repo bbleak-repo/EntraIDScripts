@@ -1,0 +1,1246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Microsoft Lighthouse MSP Security &mdash; Executive Summary</title>
+  <style>
+    /* =====================================================
+       RESET & BASE
+    ===================================================== */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --bg-primary:    #0d1117;
+      --bg-surface:    #161b22;
+      --bg-elevated:   #1c2330;
+      --bg-card:       #1f2937;
+      --border:        #30363d;
+      --border-subtle: #21262d;
+      --text-primary:  #e6edf3;
+      --text-secondary:#8b949e;
+      --text-muted:    #6e7681;
+      --accent-blue:   #58a6ff;
+      --accent-teal:   #39d0c8;
+      --accent-green:  #3fb950;
+      --accent-amber:  #d29922;
+      --accent-red:    #f85149;
+      --accent-purple: #bc8cff;
+      --gradient-header: linear-gradient(135deg, #0d1b2e 0%, #0f2d4a 50%, #0a1628 100%);
+    }
+
+    html {
+      font-size: 16px;
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.65;
+      min-height: 100vh;
+    }
+
+    /* =====================================================
+       LAYOUT WRAPPER
+    ===================================================== */
+    .page-wrapper {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px 60px;
+    }
+
+    /* =====================================================
+       HEADER
+    ===================================================== */
+    .doc-header {
+      background: var(--gradient-header);
+      border-bottom: 1px solid #1e3a5f;
+      padding: 0 24px;
+      margin: 0 -24px 48px;
+    }
+
+    .doc-header-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 40px 0 36px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+
+    .header-title-block {}
+
+    .header-eyebrow {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent-teal);
+      margin-bottom: 10px;
+    }
+
+    .header-title {
+      font-size: 28px;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+      margin-bottom: 6px;
+    }
+
+    .header-subtitle {
+      font-size: 15px;
+      color: #8db8e0;
+      font-weight: 400;
+    }
+
+    .header-meta {
+      text-align: right;
+      flex-shrink: 0;
+    }
+
+    .confidential-badge {
+      display: inline-block;
+      background: rgba(248, 81, 73, 0.15);
+      border: 1px solid rgba(248, 81, 73, 0.45);
+      color: #ff7b72;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      padding: 5px 14px;
+      border-radius: 4px;
+      margin-bottom: 14px;
+    }
+
+    .header-date {
+      font-size: 13px;
+      color: var(--text-secondary);
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .header-classification {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: block;
+    }
+
+    /* =====================================================
+       SECTION TITLES
+    ===================================================== */
+    .section {
+      margin-bottom: 52px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--accent-blue);
+      margin-bottom: 8px;
+    }
+
+    .section-title {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+      letter-spacing: -0.01em;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+
+    /* =====================================================
+       SECTION 1: EXECUTIVE OVERVIEW
+    ===================================================== */
+    .overview-text {
+      font-size: 15.5px;
+      color: #c9d1d9;
+      line-height: 1.8;
+      max-width: 880px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent-blue);
+      padding: 24px 28px;
+      border-radius: 6px;
+    }
+
+    .overview-text p + p {
+      margin-top: 12px;
+    }
+
+    /* =====================================================
+       SECTION 2: STATISTICS DASHBOARD
+    ===================================================== */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 16px;
+    }
+
+    .stat-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 20px 20px 16px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+    }
+
+    .stat-card.blue::before   { background: var(--accent-blue); }
+    .stat-card.teal::before   { background: var(--accent-teal); }
+    .stat-card.red::before    { background: var(--accent-red); }
+    .stat-card.amber::before  { background: var(--accent-amber); }
+    .stat-card.green::before  { background: var(--accent-green); }
+    .stat-card.purple::before { background: var(--accent-purple); }
+
+    .stat-value {
+      font-size: 30px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      line-height: 1;
+      margin-bottom: 8px;
+    }
+
+    .stat-card.blue   .stat-value { color: var(--accent-blue); }
+    .stat-card.teal   .stat-value { color: var(--accent-teal); }
+    .stat-card.red    .stat-value { color: var(--accent-red); }
+    .stat-card.amber  .stat-value { color: var(--accent-amber); }
+    .stat-card.green  .stat-value { color: var(--accent-green); }
+    .stat-card.purple .stat-value { color: var(--accent-purple); }
+
+    .stat-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      line-height: 1.3;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .stat-context {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+
+    /* =====================================================
+       SECTION 3: COMPARISON TABLE
+    ===================================================== */
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    thead tr {
+      background: var(--bg-elevated);
+    }
+
+    thead th {
+      padding: 13px 18px;
+      text-align: left;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      border-bottom: 1px solid var(--border);
+    }
+
+    thead th:first-child {
+      color: var(--text-muted);
+    }
+
+    thead th.col-m365 {
+      color: var(--accent-blue);
+    }
+
+    thead th.col-azure {
+      color: var(--accent-teal);
+    }
+
+    tbody tr {
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background 0.15s;
+    }
+
+    tbody tr:last-child {
+      border-bottom: none;
+    }
+
+    tbody tr:hover {
+      background: rgba(88, 166, 255, 0.04);
+    }
+
+    tbody tr:nth-child(odd) {
+      background: var(--bg-surface);
+    }
+
+    tbody tr:nth-child(even) {
+      background: var(--bg-primary);
+    }
+
+    tbody tr:nth-child(odd):hover,
+    tbody tr:nth-child(even):hover {
+      background: rgba(88, 166, 255, 0.06);
+    }
+
+    td {
+      padding: 12px 18px;
+      vertical-align: top;
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+
+    td:first-child {
+      font-weight: 600;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      width: 220px;
+    }
+
+    /* =====================================================
+       SECTION 4: DAP vs GDAP
+    ===================================================== */
+    .compare-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    @media (max-width: 640px) {
+      .compare-grid { grid-template-columns: 1fr; }
+    }
+
+    .compare-panel {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .compare-panel-header {
+      padding: 14px 20px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .compare-panel-header.danger { background: rgba(248, 81, 73, 0.08); }
+    .compare-panel-header.safe   { background: rgba(63, 185, 80, 0.08); }
+
+    .compare-panel-header .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+
+    .status-dot.red   { background: var(--accent-red); box-shadow: 0 0 6px rgba(248,81,73,0.5); }
+    .status-dot.green { background: var(--accent-green); box-shadow: 0 0 6px rgba(63,185,80,0.5); }
+
+    .compare-panel-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .compare-panel-header.danger .compare-panel-title { color: #ff7b72; }
+    .compare-panel-header.safe   .compare-panel-title { color: var(--accent-green); }
+
+    .compare-panel-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 400;
+      margin-left: auto;
+    }
+
+    .compare-list {
+      list-style: none;
+      padding: 16px 20px 20px;
+    }
+
+    .compare-list li {
+      font-size: 13.5px;
+      color: var(--text-primary);
+      padding: 7px 0;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      line-height: 1.45;
+    }
+
+    .compare-list li:last-child { border-bottom: none; }
+
+    .compare-list li::before {
+      content: '';
+      display: inline-block;
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      margin-top: 7px;
+      flex-shrink: 0;
+    }
+
+    .compare-panel.danger .compare-list li::before { background: var(--accent-red); }
+    .compare-panel.safe   .compare-list li::before { background: var(--accent-green); }
+
+    /* =====================================================
+       SECTION 5: SECURITY ARCHITECTURE LAYERS
+    ===================================================== */
+    .layers-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    .layer-row {
+      display: flex;
+      align-items: stretch;
+      border-bottom: 1px solid var(--border-subtle);
+      transition: background 0.15s;
+    }
+
+    .layer-row:last-child { border-bottom: none; }
+    .layer-row:hover { background: rgba(88,166,255,0.04); }
+
+    .layer-number {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 56px;
+      flex-shrink: 0;
+      font-size: 20px;
+      font-weight: 800;
+      border-right: 1px solid var(--border-subtle);
+    }
+
+    .layer-row:nth-child(1) .layer-number { color: var(--accent-blue);   background: rgba(88,166,255,0.07); }
+    .layer-row:nth-child(2) .layer-number { color: var(--accent-teal);   background: rgba(57,208,200,0.07); }
+    .layer-row:nth-child(3) .layer-number { color: var(--accent-amber);  background: rgba(210,153,34,0.07); }
+    .layer-row:nth-child(4) .layer-number { color: var(--accent-purple); background: rgba(188,140,255,0.07); }
+    .layer-row:nth-child(5) .layer-number { color: var(--accent-green);  background: rgba(63,185,80,0.07); }
+
+    .layer-content {
+      padding: 16px 20px;
+      background: var(--bg-surface);
+      flex: 1;
+    }
+
+    .layer-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 4px;
+    }
+
+    .layer-desc {
+      font-size: 13px;
+      color: var(--text-secondary);
+      line-height: 1.5;
+    }
+
+    .layer-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .tag {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: 3px;
+      letter-spacing: 0.02em;
+    }
+
+    .tag.blue   { background: rgba(88,166,255,0.12);   color: var(--accent-blue);   border: 1px solid rgba(88,166,255,0.2); }
+    .tag.teal   { background: rgba(57,208,200,0.12);   color: var(--accent-teal);   border: 1px solid rgba(57,208,200,0.2); }
+    .tag.amber  { background: rgba(210,153,34,0.12);   color: var(--accent-amber);  border: 1px solid rgba(210,153,34,0.2); }
+    .tag.purple { background: rgba(188,140,255,0.12);  color: var(--accent-purple); border: 1px solid rgba(188,140,255,0.2); }
+    .tag.green  { background: rgba(63,185,80,0.12);    color: var(--accent-green);  border: 1px solid rgba(63,185,80,0.2); }
+    .tag.red    { background: rgba(248,81,73,0.12);    color: var(--accent-red);    border: 1px solid rgba(248,81,73,0.2); }
+
+    /* =====================================================
+       SECTION 6: RISK FINDINGS
+    ===================================================== */
+    .risks-list {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .risk-item {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent-red);
+      border-radius: 0 6px 6px 0;
+      padding: 16px 20px;
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+
+    .risk-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(248,81,73,0.15);
+      border: 1px solid rgba(248,81,73,0.35);
+      color: #ff7b72;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 4px 10px;
+      border-radius: 3px;
+      white-space: nowrap;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .risk-text {
+      font-size: 14px;
+      color: var(--text-primary);
+      line-height: 1.55;
+    }
+
+    .risk-title {
+      font-weight: 700;
+      color: #ffa198;
+      margin-bottom: 3px;
+    }
+
+    .risk-detail {
+      color: var(--text-secondary);
+      font-size: 13px;
+    }
+
+    /* =====================================================
+       SECTION 7: RECOMMENDATIONS
+    ===================================================== */
+    .recs-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .rec-item {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 14px 18px;
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+    }
+
+    .rec-number {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 800;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .rec-number.critical { background: rgba(248,81,73,0.18); color: #ff7b72; border: 1px solid rgba(248,81,73,0.3); }
+    .rec-number.high     { background: rgba(210,153,34,0.18); color: #e3b341; border: 1px solid rgba(210,153,34,0.3); }
+    .rec-number.medium   { background: rgba(88,166,255,0.18); color: var(--accent-blue); border: 1px solid rgba(88,166,255,0.3); }
+
+    .rec-body { flex: 1; }
+
+    .rec-priority {
+      display: inline-block;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 2px 8px;
+      border-radius: 3px;
+      margin-bottom: 5px;
+    }
+
+    .rec-priority.critical { background: rgba(248,81,73,0.12); color: #ff7b72; border: 1px solid rgba(248,81,73,0.25); }
+    .rec-priority.high     { background: rgba(210,153,34,0.12); color: #e3b341; border: 1px solid rgba(210,153,34,0.25); }
+    .rec-priority.medium   { background: rgba(88,166,255,0.12); color: var(--accent-blue); border: 1px solid rgba(88,166,255,0.25); }
+
+    .rec-text {
+      font-size: 14px;
+      color: var(--text-primary);
+      line-height: 1.5;
+    }
+
+    /* =====================================================
+       SECTION 8: COMPLIANCE TABLE
+    ===================================================== */
+    .compliance-table-wrap {
+      overflow-x: auto;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .compliance-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    .compliance-table thead th {
+      padding: 12px 18px;
+      text-align: left;
+      background: var(--bg-elevated);
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .compliance-table tbody tr {
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .compliance-table tbody tr:last-child { border-bottom: none; }
+
+    .compliance-table tbody tr:nth-child(odd)  { background: var(--bg-surface); }
+    .compliance-table tbody tr:nth-child(even) { background: var(--bg-primary); }
+
+    .compliance-table td {
+      padding: 12px 18px;
+      vertical-align: top;
+      line-height: 1.5;
+    }
+
+    .compliance-table td:first-child {
+      font-weight: 700;
+      color: var(--accent-blue);
+      white-space: nowrap;
+      width: 130px;
+    }
+
+    .compliance-table td:last-child {
+      color: var(--text-secondary);
+      font-size: 13.5px;
+    }
+
+    /* =====================================================
+       FOOTER
+    ===================================================== */
+    .doc-footer {
+      border-top: 1px solid var(--border);
+      margin-top: 60px;
+      padding-top: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .footer-sources {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.7;
+      max-width: 780px;
+    }
+
+    .footer-sources strong {
+      color: var(--text-secondary);
+      font-weight: 600;
+    }
+
+    .footer-badge {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      white-space: nowrap;
+      border: 1px solid var(--border);
+      padding: 6px 12px;
+      border-radius: 4px;
+      align-self: flex-start;
+    }
+
+    /* =====================================================
+       DIVIDER UTILITY
+    ===================================================== */
+    .divider {
+      height: 1px;
+      background: var(--border);
+      margin: 0;
+    }
+
+    /* =====================================================
+       PRINT STYLES
+    ===================================================== */
+    @media print {
+      body {
+        background: #ffffff !important;
+        color: #111111 !important;
+      }
+
+      :root {
+        --bg-primary:    #ffffff;
+        --bg-surface:    #f6f8fa;
+        --bg-elevated:   #eaeef2;
+        --bg-card:       #f0f4f8;
+        --border:        #d0d7de;
+        --border-subtle: #e8edf2;
+        --text-primary:  #1f2328;
+        --text-secondary:#57606a;
+        --text-muted:    #818b98;
+        --accent-blue:   #0969da;
+        --accent-teal:   #1a7f6e;
+        --accent-green:  #1a7f37;
+        --accent-amber:  #9a6700;
+        --accent-red:    #cf222e;
+        --accent-purple: #6639ba;
+      }
+
+      .doc-header {
+        background: #0d1b2e !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .page-wrapper {
+        padding: 0 16px 40px;
+      }
+
+      .stat-card::before {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .layer-number {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      .risk-item {
+        border-left: 4px solid var(--accent-red) !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+
+      a { text-decoration: none; }
+
+      .section { page-break-inside: avoid; }
+    }
+
+    /* =====================================================
+       RESPONSIVE
+    ===================================================== */
+    @media (max-width: 768px) {
+      .doc-header-inner {
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .header-meta { text-align: left; }
+
+      .stats-grid {
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      }
+
+      .header-title { font-size: 22px; }
+
+      td:first-child { width: auto; white-space: normal; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- =========================================================
+       HEADER
+  ========================================================= -->
+  <header class="doc-header">
+    <div class="doc-header-inner">
+      <div class="header-title-block">
+        <div class="header-eyebrow">MSP Security Assessment</div>
+        <h1 class="header-title">Microsoft Lighthouse<br>Security Architecture</h1>
+        <p class="header-subtitle">Executive Summary &mdash; MSP Multi-Tenant Management &amp; GDAP Security</p>
+      </div>
+      <div class="header-meta">
+        <div class="confidential-badge">Confidential</div>
+        <span class="header-date">Prepared: 2026-03-30</span>
+        <span class="header-classification">C-Suite / Board Distribution</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- =========================================================
+       PAGE WRAPPER
+  ========================================================= -->
+  <div class="page-wrapper">
+
+    <!-- =====================================================
+         SECTION 1: EXECUTIVE OVERVIEW
+    ===================================================== -->
+    <section class="section">
+      <div class="section-label">Section 01</div>
+      <h2 class="section-title">Executive Overview</h2>
+      <div class="overview-text">
+        <p>Microsoft 365 Lighthouse is the platform through which Managed Service Providers (MSPs) administer multiple customer Microsoft 365 tenants from a single pane of glass, covering identity, security posture, device management, and compliance monitoring. Prior to 2022, this access was granted via Delegated Admin Privileges (DAP) &mdash; a broad, unscoped mechanism that automatically conferred Global Administrator rights across every customer tenant with no time limit and no customer approval required.</p>
+        <p>The NOBELIUM supply chain attacks of 2021 demonstrated catastrophically that compromising a single MSP partner account provided threat actors with lateral movement paths into dozens or hundreds of downstream customers simultaneously. In direct response, Microsoft deprecated DAP in July 2024, replacing it with Granular Delegated Admin Privileges (GDAP): a time-bounded, role-scoped, customer-approved delegation model.</p>
+        <p>This document summarizes the current security architecture of Microsoft Lighthouse under GDAP, identifies residual risks that require organizational controls, and presents a prioritized set of recommendations for hardening the MSP access model to protect both the organization and its customers.</p>
+      </div>
+    </section>
+
+    <!-- =====================================================
+         SECTION 2: KEY STATISTICS DASHBOARD
+    ===================================================== -->
+    <section class="section">
+      <div class="section-label">Section 02</div>
+      <h2 class="section-title">Key Statistics</h2>
+      <div class="stats-grid">
+
+        <div class="stat-card red">
+          <div class="stat-value">140+</div>
+          <div class="stat-label">CSPs Targeted</div>
+          <div class="stat-context">Cloud Service Providers targeted by NOBELIUM in 2021 supply chain campaign</div>
+        </div>
+
+        <div class="stat-card red">
+          <div class="stat-value">14</div>
+          <div class="stat-label">CSPs Confirmed Compromised</div>
+          <div class="stat-context">Partners confirmed breached; downstream customer exposure was widespread</div>
+        </div>
+
+        <div class="stat-card amber">
+          <div class="stat-value">$70M</div>
+          <div class="stat-label">Ransom Demand</div>
+          <div class="stat-context">Kaseya VSA attack (2021) &mdash; REvil ransomware via MSP supply chain</div>
+        </div>
+
+        <div class="stat-card amber">
+          <div class="stat-value">1,500</div>
+          <div class="stat-label">Businesses Affected</div>
+          <div class="stat-context">800&ndash;1,500 downstream businesses impacted in Kaseya attack</div>
+        </div>
+
+        <div class="stat-card red">
+          <div class="stat-value">1.1M</div>
+          <div class="stat-label">Individuals Affected</div>
+          <div class="stat-context">BerryDunn / Reliable Networks MSP breach (2023)</div>
+        </div>
+
+        <div class="stat-card blue">
+          <div class="stat-value">2,500</div>
+          <div class="stat-label">Seat Cap</div>
+          <div class="stat-context">Maximum licensed seats per customer tenant manageable in Lighthouse</div>
+        </div>
+
+        <div class="stat-card teal">
+          <div class="stat-value">730</div>
+          <div class="stat-label">Max GDAP Days</div>
+          <div class="stat-context">Maximum duration for a single GDAP relationship (2 years)</div>
+        </div>
+
+        <div class="stat-card green">
+          <div class="stat-value">180</div>
+          <div class="stat-label">Auto-Extend Days</div>
+          <div class="stat-context">Increment by which GDAP relationships auto-extend if not terminated</div>
+        </div>
+
+        <div class="stat-card purple">
+          <div class="stat-value">90</div>
+          <div class="stat-label">Pending Expiry Days</div>
+          <div class="stat-context">GDAP approval requests expire after 90 days without customer action</div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =====================================================
+         SECTION 3: TWO PRODUCTS NAMED LIGHTHOUSE
+    ===================================================== -->
+    <section class="section">
+      <div class="section-label">Section 03</div>
+      <h2 class="section-title">Two Products Share the &ldquo;Lighthouse&rdquo; Name</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th class="col-m365">M365 Lighthouse</th>
+              <th class="col-azure">Azure Lighthouse</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Purpose</td>
+              <td>M365 multi-tenant MSP management (identity, security, devices, compliance)</td>
+              <td>Azure resource delegation at ARM layer for infrastructure management</td>
+            </tr>
+            <tr>
+              <td>Scope</td>
+              <td>Identity, security posture, devices, compliance policies</td>
+              <td>Azure subscriptions, resource groups, individual resources</td>
+            </tr>
+            <tr>
+              <td>Access Model</td>
+              <td>GDAP via CSP partner program &mdash; customer-approved, role-scoped, time-bound</td>
+              <td>Registration definitions and assignments &mdash; customer deploys ARM templates</td>
+            </tr>
+            <tr>
+              <td>Cost</td>
+              <td>Free (included for CSP partners)</td>
+              <td>Free (no additional charge)</td>
+            </tr>
+            <tr>
+              <td>Seat Limit</td>
+              <td>2,500 licensed seats per customer tenant</td>
+              <td>None &mdash; scales to subscription size</td>
+            </tr>
+            <tr>
+              <td>On-Premises Support</td>
+              <td>No &mdash; SaaS only, cloud tenants only</td>
+              <td>Yes, via Azure Arc for hybrid/on-prem resources</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- =====================================================
+         SECTION 4: DAP vs GDAP
+    ===================================================== -->
+    <section class="section">
+      <div class="section-label">Section 04</div>
+      <h2 class="section-title">DAP vs. GDAP &mdash; Before and After</h2>
+      <div class="compare-grid">
+
+        <div class="compare-panel danger">
+          <div class="compare-panel-header danger">
+            <span class="status-dot red"></span>
+            <span class="compare-panel-title">DAP &mdash; Delegated Admin Privileges</span>
+            <span class="compare-panel-subtitle">Deprecated July 2024</span>
+          </div>
+          <ul class="compare-list">
+            <li>Automatic Global Administrator role granted to all customer tenants upon CSP relationship creation</li>
+            <li>No time limit &mdash; access persisted indefinitely without renewal or review</li>
+            <li>No role granularity &mdash; full tenant control or nothing</li>
+            <li>No customer approval required &mdash; unilateral partner-side activation</li>
+            <li>No dedicated audit logs for delegated access actions</li>
+            <li>Single partner account compromise exposed every downstream customer simultaneously</li>
+          </ul>
+        </div>
+
+        <div class="compare-panel safe">
+          <div class="compare-panel-header safe">
+            <span class="status-dot green"></span>
+            <span class="compare-panel-title">GDAP &mdash; Granular Delegated Admin Privileges</span>
+            <span class="compare-panel-subtitle">Current Standard</span>
+          </div>
+          <ul class="compare-list">
+            <li>Specific Entra ID roles assigned per customer &mdash; least privilege enforced at the role level</li>
+            <li>Time-bound relationships (1 to 730 days) with defined expiry and auto-extend increments</li>
+            <li>Customer must explicitly approve each GDAP relationship request</li>
+            <li>Per-customer scoping &mdash; a compromise in one partner account does not automatically extend to all customers</li>
+            <li>Full audit trail in Entra ID audit logs and Microsoft 365 unified audit log</li>
+            <li>Supports Privileged Identity Management (PIM) just-in-time elevation for partner security groups</li>
+          </ul>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =====================================================
+         SECTION 5: SECURITY ARCHITECTURE
+    ===================================================== -->
+    <section class="section">
+      <div class="section-label">Section 05</div>
+      <h2 class="section-title">Security Architecture &mdash; Defense in Depth</h2>
+      <div class="layers-stack">
+
+        <div class="layer-row">
+          <div class="layer-number">1</div>
+          <div class="layer-content">
+            <div class="layer-title">GDAP Permission Model</div>
+            <div class="layer-desc">Foundation of the access control model. Entra ID roles are scoped to specific customers and time-bounded. Role assignments align to service line requirements (e.g., Helpdesk Technician, Exchange Administrator, Intune Administrator) rather than broad Global Administrator grants.</div>
+            <div class="layer-tags">
+              <span class="tag blue">Least Privilege</span>
+              <span class="tag blue">Role Scoping</span>
+              <span class="tag blue">Time-Bound</span>
+              <span class="tag blue">Customer Approval</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="layer-row">
+          <div class="layer-number">2</div>
+          <div class="layer-content">
+            <div class="layer-title">Conditional Access Policies</div>
+            <div class="layer-desc">Partner home-tenant Conditional Access policies govern all delegated access sessions. Controls include phishing-resistant MFA (FIDO2 / Windows Hello), compliant device requirements, and named-location geo-fencing restricting access to US-based IP ranges. Customer tenant CA policies do not apply to partner sessions.</div>
+            <div class="layer-tags">
+              <span class="tag teal">Phishing-Resistant MFA</span>
+              <span class="tag teal">Device Compliance</span>
+              <span class="tag teal">Geo-Fencing</span>
+              <span class="tag teal">Session Controls</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="layer-row">
+          <div class="layer-number">3</div>
+          <div class="layer-content">
+            <div class="layer-title">Privileged Identity Management (PIM) / Just-In-Time Access</div>
+            <div class="layer-desc">GDAP security groups in the partner tenant are configured as PIM-eligible rather than permanent. Technicians request time-limited elevation for specific tasks, subject to approval workflows and business justification. Activation scope in Lighthouse applies across all tenants in a role template &mdash; per-customer activation is not currently supported.</div>
+            <div class="layer-tags">
+              <span class="tag amber">JIT Elevation</span>
+              <span class="tag amber">Approval Workflows</span>
+              <span class="tag amber">Justification Required</span>
+              <span class="tag red">Template-Level Scope (Risk)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="layer-row">
+          <div class="layer-number">4</div>
+          <div class="layer-content">
+            <div class="layer-title">Auditing &amp; Monitoring</div>
+            <div class="layer-desc">Microsoft Sentinel provides cross-tenant SIEM integration for comprehensive log correlation. Microsoft Purview Compliance Center provides detailed audit logs, though interactive audit search via GDAP is not supported &mdash; a dedicated audit-only account is required. Lighthouse native alerts cover Defender for Business, Defender Antivirus, and Entra ID identity protection events.</div>
+            <div class="layer-tags">
+              <span class="tag purple">Microsoft Sentinel</span>
+              <span class="tag purple">Purview Audit</span>
+              <span class="tag purple">Lighthouse Alerts</span>
+              <span class="tag red">Purview GDAP Gap (Risk)</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="layer-row">
+          <div class="layer-number">5</div>
+          <div class="layer-content">
+            <div class="layer-title">Operational SOPs &amp; Governance</div>
+            <div class="layer-desc">People and process controls that wrap the technical layers. Includes defined onboarding and offboarding procedures for both customers and technicians, quarterly access reviews, annual GDAP relationship audits, incident response runbooks for partner account compromise, and session recording via CyberArk PSM for privileged administrative sessions.</div>
+            <div class="layer-tags">
+              <span class="tag green">Access Reviews</span>
+              <span class="tag green">Onboarding / Offboarding</span>
+              <span class="tag green">Incident Response</span>
+              <span class="tag green">Session Recording</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =====================================================
+         SECTION 6: CRITICAL RISK FINDINGS
+    ===================================================== -->
+    <section class="section">
+      <div class="section-label">Section 06</div>
+      <h2 class="section-title">Critical Risk Findings</h2>
+      <div class="risks-list">
+
+        <div class="risk-item">
+          <span class="risk-badge">Risk</span>
+          <div class="risk-text">
+            <div class="risk-title">GDAP MFA Trust Override &mdash; Partner Home Tenant Controls Are Always Authoritative</div>
+            <div class="risk-detail">When a technician authenticates via GDAP, the partner home tenant&rsquo;s MFA satisfaction is unconditionally trusted by all customer tenants &mdash; regardless of the customer&rsquo;s own Conditional Access policies or MFA requirements. A customer organization cannot enforce stronger authentication standards on their MSP&rsquo;s access than the MSP enforces on itself. This places the entire security burden on the partner tenant&rsquo;s controls.</div>
+          </div>
+        </div>
+
+        <div class="risk-item">
+          <span class="risk-badge">Risk</span>
+          <div class="risk-text">
+            <div class="risk-title">MSP Identity Redacted in Customer Audit Logs</div>
+            <div class="risk-detail">Partner technician activity recorded in customer tenant audit logs appears as &ldquo;[Partner Name] Technician&rdquo; rather than the individual technician&rsquo;s user principal name. This limits forensic traceability within the customer tenant. Detailed per-technician audit attribution requires access to the partner tenant&rsquo;s own audit logs, which the customer cannot independently access.</div>
+          </div>
+        </div>
+
+        <div class="risk-item">
+          <span class="risk-badge">Risk</span>
+          <div class="risk-text">
+            <div class="risk-title">Lighthouse PIM JIT Activates Across All Tenants in a Role Template</div>
+            <div class="risk-detail">When a technician activates a GDAP role via PIM within the Lighthouse JIT workflow, the elevation applies to every customer tenant associated with that role template &mdash; not to a single specified customer. This is broader than the minimum necessary access principle for single-customer tasks and increases the blast radius of a compromised activation.</div>
+          </div>
+        </div>
+
+        <div class="risk-item">
+          <span class="risk-badge">Risk</span>
+          <div class="risk-text">
+            <div class="risk-title">Microsoft Purview Interactive Audit Search Not Supported via GDAP</div>
+            <div class="risk-detail">Compliance administrators operating under GDAP delegation cannot use the Microsoft Purview compliance portal&rsquo;s interactive content search and audit tools. A dedicated, non-GDAP account with Compliance Administrator or eDiscovery permissions must be provisioned per customer tenant to perform Purview audit operations. This creates additional account management overhead and a potential orphaned-account risk if not tracked.</div>
+          </div>
+        </div>
+
+        <div class="risk-item">
+          <span class="risk-badge">Risk</span>
+          <div class="risk-text">
+            <div class="risk-title">Lighthouse Native Alerting Has Limited Scope</div>
+            <div class="risk-detail">Lighthouse&rsquo;s built-in alert capabilities are limited to events from Microsoft Defender for Business, Microsoft Defender Antivirus, and Entra ID Identity Protection. Significant security event categories &mdash; including SharePoint/OneDrive data exfiltration, Exchange transport rule manipulation, Azure resource abuse, and third-party application consent grants &mdash; are not surfaced through Lighthouse alerts and require Microsoft Sentinel or equivalent SIEM integration for coverage.</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =====================================================
+         SECTION 7: RECOMMENDATIONS
+    ===================================================== -->
+    <section class="section">
+      <div class="section-label">Section 07</div>
+      <h2 class="section-title">Key Recommendations</h2>
+      <div class="recs-list">
+
+        <div class="rec-item">
+          <div class="rec-number critical">1</div>
+          <div class="rec-body">
+            <span class="rec-priority critical">Critical</span>
+            <div class="rec-text">Complete DAP-to-GDAP migration immediately for any remaining customer relationships. DAP was deprecated in July 2024 and represents an unacceptable access control risk. Verify no DAP relationships remain active via Partner Center.</div>
+          </div>
+        </div>
+
+        <div class="rec-item">
+          <div class="rec-number critical">2</div>
+          <div class="rec-body">
+            <span class="rec-priority critical">Critical</span>
+            <div class="rec-text">Implement PIM for Groups on all GDAP security groups in the partner tenant. Technicians must have no standing privileged access &mdash; all elevated roles must be time-limited, require justification, and trigger approval workflows. Permanent group membership for GDAP groups is unacceptable.</div>
+          </div>
+        </div>
+
+        <div class="rec-item">
+          <div class="rec-number high">3</div>
+          <div class="rec-body">
+            <span class="rec-priority high">High</span>
+            <div class="rec-text">Deploy Conditional Access in the partner tenant requiring phishing-resistant MFA (FIDO2 security keys or Windows Hello for Business) for all GDAP-enabled accounts. Password + SMS/TOTP MFA is insufficient given the privilege level of these accounts.</div>
+          </div>
+        </div>
+
+        <div class="rec-item">
+          <div class="rec-number high">4</div>
+          <div class="rec-body">
+            <span class="rec-priority high">High</span>
+            <div class="rec-text">Configure US-only named location geo-fencing in the partner tenant&rsquo;s Conditional Access policies to restrict GDAP access to known US IP ranges. Document the VPN bypass risk: technicians on VPN with non-US exit nodes may be blocked. Evaluate split-tunnel or IP allowlist approach for remote work scenarios.</div>
+          </div>
+        </div>
+
+        <div class="rec-item">
+          <div class="rec-number high">5</div>
+          <div class="rec-body">
+            <span class="rec-priority high">High</span>
+            <div class="rec-text">Deploy Microsoft Sentinel with cross-tenant workspace configuration for comprehensive MSP security monitoring. Lighthouse&rsquo;s native alerts are insufficient for detecting data exfiltration, lateral movement, or application-layer attacks. Sentinel is the minimum viable solution for enterprise-grade MSP security posture.</div>
+          </div>
+        </div>
+
+        <div class="rec-item">
+          <div class="rec-number medium">6</div>
+          <div class="rec-body">
+            <span class="rec-priority medium">Medium</span>
+            <div class="rec-text">Implement CyberArk Privileged Session Manager (PSM) for session recording of all high-privilege administrative actions. PIM controls when access is granted, but does not record what was done during the session. Session recording is essential for audit defensibility and forensic investigation.</div>
+          </div>
+        </div>
+
+        <div class="rec-item">
+          <div class="rec-number medium">7</div>
+          <div class="rec-body">
+            <span class="rec-priority medium">Medium</span>
+            <div class="rec-text">Align GDAP role assignments to Statement of Work service lines. Each customer&rsquo;s GDAP relationship should grant only the roles required to deliver contracted services. Avoid assigning Global Administrator or broad roles as a convenience measure for future tasks.</div>
+          </div>
+        </div>
+
+        <div class="rec-item">
+          <div class="rec-number medium">8</div>
+          <div class="rec-body">
+            <span class="rec-priority medium">Medium</span>
+            <div class="rec-text">Establish quarterly access reviews for all GDAP security group memberships and annual reviews of GDAP relationship scope per customer. Offboarded technicians and deprecated service lines should trigger immediate access revocation, not periodic review cycles.</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- =====================================================
+         SECTION 8: COMPLIANCE FRAMEWORK MAPPING
+    ===================================================== -->
+    <section class="section">
+      <div class="section-label">Section 08</div>
+      <h2 class="section-title">Compliance Framework Mapping</h2>
+      <div class="compliance-table-wrap">
+        <table class="compliance-table">
+          <thead>
+            <tr>
+              <th>Framework</th>
+              <th>Key Controls Addressed by This Security Architecture</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>SOC 2</td>
+              <td>CC6.1 (logical access controls), CC6.2 (authentication), CC6.3 (authorization and access restrictions), CC7.2 (security monitoring and alerting)</td>
+            </tr>
+            <tr>
+              <td>ISO 27001</td>
+              <td>A.9.2 (user access management lifecycle), A.9.4 (system and application access control), A.12.4 (logging and monitoring)</td>
+            </tr>
+            <tr>
+              <td>NIST 800-53</td>
+              <td>AC-2 (account management), AC-6 (least privilege), AU-2 through AU-12 (audit event generation, review, protection, and reporting)</td>
+            </tr>
+            <tr>
+              <td>NIST CSF 2.0</td>
+              <td>PR.AA (identity management and access control), DE.CM (continuous monitoring of assets and users)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- =====================================================
+         FOOTER
+    ===================================================== -->
+    <div class="divider"></div>
+    <footer class="doc-footer">
+      <div class="footer-sources">
+        <strong>Sources &amp; References:</strong> Based on research conducted 2026-03-30. Sources include Microsoft Learn documentation (Microsoft 365 Lighthouse, GDAP, PIM for Groups), CISA Advisory AA22-131A (Protecting Against Cyber Threats to Managed Service Providers), NIST SP 800-161r1 (Cybersecurity Supply Chain Risk Management), and CyberArk documentation.
+      </div>
+      <div class="footer-badge">Confidential</div>
+    </footer>
+
+  </div><!-- end .page-wrapper -->
+
+</body>
+</html>

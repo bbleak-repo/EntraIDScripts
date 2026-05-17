@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CyberArk vs. Microsoft Lighthouse/PIM -- Where Each Fits in MSP Security</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-surface: #161b22;
+    --bg-elevated: #1c2129;
+    --border-color: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-yellow: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-orange: #d18616;
+    --accent-teal: #39d2c0;
+    --cyberark-blue: #0070c0;
+    --ms-blue: #58a6ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif; background: var(--bg-primary); color: var(--text-primary); line-height: 1.7; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px 60px; }
+  header { background: linear-gradient(135deg, #0d1117 0%, #161b40 50%, #0d1117 100%); border-bottom: 3px solid var(--accent-purple); padding: 40px 24px; text-align: center; }
+  header h1 { font-size: 1.9rem; font-weight: 700; margin-bottom: 8px; }
+  header .subtitle { color: var(--text-secondary); font-size: 1.1rem; }
+  header .meta { color: var(--text-muted); font-size: 0.85rem; margin-top: 12px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .badge-analysis { background: #1f1a3d; color: var(--accent-purple); }
+  h2 { font-size: 1.5rem; font-weight: 600; margin: 48px 0 20px; padding-bottom: 8px; border-bottom: 2px solid var(--border-color); color: var(--accent-purple); }
+  h3 { font-size: 1.15rem; font-weight: 600; margin: 28px 0 12px; color: var(--text-primary); }
+  h4 { font-size: 1rem; font-weight: 600; margin: 20px 0 8px; }
+  p { color: var(--text-secondary); margin-bottom: 12px; }
+  .card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 24px; margin: 16px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9rem; }
+  th { background: var(--bg-elevated); text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border-color); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); }
+  tr:hover td { background: rgba(188, 140, 255, 0.04); }
+  .th-ms { color: var(--ms-blue); }
+  .th-ca { color: var(--accent-orange); }
+  .th-neutral { color: var(--accent-purple); }
+  .status { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+  .status-yes { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }
+  .status-no { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }
+  .status-partial { background: rgba(210, 153, 34, 0.15); color: var(--accent-yellow); }
+  .status-only { background: rgba(188, 140, 255, 0.15); color: var(--accent-purple); }
+  .alert { border-radius: 8px; padding: 16px 20px; margin: 16px 0; border-left: 4px solid; }
+  .alert-red { background: rgba(248, 81, 73, 0.08); border-color: var(--accent-red); }
+  .alert-yellow { background: rgba(210, 153, 34, 0.08); border-color: var(--accent-yellow); }
+  .alert-blue { background: rgba(88, 166, 255, 0.08); border-color: var(--accent-blue); }
+  .alert-green { background: rgba(63, 185, 80, 0.08); border-color: var(--accent-green); }
+  .alert-purple { background: rgba(188, 140, 255, 0.08); border-color: var(--accent-purple); }
+  .alert-title { font-weight: 700; margin-bottom: 4px; }
+  .alert-red .alert-title { color: var(--accent-red); }
+  .alert-yellow .alert-title { color: var(--accent-yellow); }
+  .alert-blue .alert-title { color: var(--accent-blue); }
+  .alert-green .alert-title { color: var(--accent-green); }
+  .alert-purple .alert-title { color: var(--accent-purple); }
+  .comparison-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+  .comparison-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; border-top: 3px solid; }
+  .comparison-card ul { padding-left: 18px; color: var(--text-secondary); font-size: 0.9rem; }
+  .comparison-card li { margin: 6px 0; }
+  .verdict { background: var(--bg-elevated); border: 2px solid var(--accent-purple); border-radius: 8px; padding: 20px; margin: 20px 0; text-align: center; }
+  .verdict-label { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px; color: var(--accent-purple); margin-bottom: 4px; }
+  .verdict-text { font-size: 1.1rem; font-weight: 600; color: var(--text-primary); }
+  .scenario { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; margin: 12px 0; display: flex; gap: 16px; align-items: flex-start; }
+  .scenario-icon { flex-shrink: 0; width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; color: #fff; }
+  .scenario-ms { background: #1a3a5f; color: var(--ms-blue); }
+  .scenario-ca { background: #3d2a0d; color: var(--accent-orange); }
+  .scenario-both { background: #2d1a3d; color: var(--accent-purple); }
+  .scenario-content { flex: 1; }
+  .scenario-content h4 { margin: 0 0 4px; }
+  .scenario-content p { font-size: 0.9rem; margin: 0; }
+  @media (max-width: 768px) { header h1 { font-size: 1.5rem; } .comparison-grid { grid-template-columns: 1fr; } }
+  @media print { body { background: #fff; color: #111; } .card, .comparison-card, .scenario, .verdict { background: #f8f8f8; border-color: #ddd; } header { background: #f0f0f0; border-color: #333; } h2, h3, h4, header h1 { color: #111; } th { background: #e8e8e8; color: #111; } td, p { color: #333; } }
+</style>
+</head>
+<body>
+<header>
+  <div style="margin-bottom:8px;"><span class="badge badge-analysis">Analysis</span></div>
+  <h1>CyberArk vs. Microsoft Lighthouse/PIM</h1>
+  <div class="subtitle">Where Each Fits, Why CyberArk Cannot Replace PIM for GDAP, and How to Combine Them</div>
+  <div class="meta">Prepared 2026-04-07 | For MSP Security Architects with Existing CyberArk Deployments</div>
+</header>
+
+<div class="container">
+
+<!-- ==================== EXECUTIVE SUMMARY ==================== -->
+<h2>Executive Summary</h2>
+
+<div class="alert alert-purple">
+  <div class="alert-title">The Bottom Line</div>
+  <p>CyberArk <strong>cannot replace</strong> Entra PIM for GDAP access control. PIM for Groups is the <strong>only mechanism</strong> that can grant or revoke GDAP security group membership -- no external tool can do this. However, CyberArk fills critical gaps that PIM does not address: session recording, credential vaulting/rotation, non-Microsoft system access, and forensic audit trails. The two tools are <strong>complementary, not competing</strong>. The optimal architecture uses both in a layered model.</p>
+</div>
+
+<p>This document explains exactly why CyberArk cannot fully replace PIM, where each tool excels, the pros and cons of each approach, and how to combine them to maximize security without unnecessary friction or license costs.</p>
+
+<!-- ==================== WHY CYBERARK CANNOT REPLACE PIM ==================== -->
+<h2>1. Why CyberArk Cannot Replace PIM for GDAP</h2>
+
+<h3>1a. The Architectural Constraint</h3>
+<p>GDAP access flows through a specific three-stage mechanism in Microsoft's infrastructure:</p>
+
+<div class="card">
+  <p style="color:var(--text-primary); font-weight:600; margin-bottom:12px;">GDAP Access Chain:</p>
+  <p><strong>Partner Tenant Security Group</strong> --[membership]--> <strong>GDAP Relationship</strong> --[role delegation]--> <strong>Customer Tenant Entra Roles</strong></p>
+  <p style="margin-top:12px;">The critical link is <strong>security group membership</strong>. A technician accesses a customer tenant because they are a <em>member</em> of a specific security group that has been assigned to a GDAP relationship. The only system that can control membership in an Entra ID security group is <strong>Entra ID itself</strong> -- specifically, Entra PIM for Groups.</p>
+  <p>CyberArk operates at the credential layer (vaulting passwords, injecting credentials into sessions, recording sessions). It does not have the ability to add or remove users from Entra ID security groups as part of a JIT workflow. CyberArk's API can call Microsoft Graph to manage group membership in theory, but this would be a custom integration, not a supported native workflow, and it would still be calling Entra's APIs under the hood.</p>
+</div>
+
+<div class="alert alert-red">
+  <div class="alert-title">The Hard Technical Truth</div>
+  <p>No external PAM tool -- CyberArk, BeyondTrust, Delinea, or any other -- can natively manage GDAP security group membership. This is a Microsoft platform constraint. The JIT activation for GDAP <strong>must</strong> go through Entra PIM for Groups. This is not a preference or a recommendation; it is an architectural requirement of how GDAP works.</p>
+</div>
+
+<h3>1b. What CyberArk CAN Do for Microsoft 365 Access</h3>
+<p>CyberArk is not useless for Microsoft 365 -- far from it. But it operates at a different layer:</p>
+<div class="card">
+  <table>
+    <tr><th>CyberArk Capability</th><th>How It Works</th><th>GDAP Relevant?</th></tr>
+    <tr><td style="color:var(--text-primary);">Vault M365 admin credentials</td><td>Store admin account passwords in CyberArk vault; technician checks out credential via PSM</td><td><span class="status status-partial">Partial</span> -- works for direct admin accounts, not for GDAP delegated access</td></tr>
+    <tr><td style="color:var(--text-primary);">Rotate M365 admin passwords</td><td>Central Policy Manager rotates passwords on schedule via Graph API</td><td><span class="status status-partial">Partial</span> -- useful for break-glass and service accounts, not for GDAP user accounts</td></tr>
+    <tr><td style="color:var(--text-primary);">Record admin sessions (PSM)</td><td>Session proxy captures screen, keystrokes, commands during admin portal use</td><td><span class="status status-yes">YES</span> -- critical gap PIM does not fill</td></tr>
+    <tr><td style="color:var(--text-primary);">Zero Standing Privilege (SIA)</td><td>Ephemeral accounts created/destroyed per session on target systems</td><td><span class="status status-no">NO</span> -- SIA targets infrastructure (RDP, SSH, DB), not M365 portal access</td></tr>
+    <tr><td style="color:var(--text-primary);">Endpoint privilege elevation (EPM)</td><td>JIT local admin elevation for specific applications</td><td><span class="status status-no">NO</span> -- endpoint-layer, not cloud admin-layer</td></tr>
+  </table>
+</div>
+
+<!-- ==================== COMPREHENSIVE COMPARISON ==================== -->
+<h2>2. Comprehensive Feature Comparison</h2>
+
+<div class="card" style="overflow-x:auto;">
+  <table>
+    <tr>
+      <th class="th-neutral">Capability</th>
+      <th class="th-ms">Entra PIM + Lighthouse</th>
+      <th class="th-ca">CyberArk</th>
+      <th class="th-neutral">Verdict</th>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">GDAP role JIT activation</td>
+      <td><span class="status status-only">ONLY OPTION</span></td>
+      <td><span class="status status-no">Cannot</span></td>
+      <td>PIM required</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Session recording (screen + keystrokes)</td>
+      <td><span class="status status-no">No</span></td>
+      <td><span class="status status-yes">PSM -- full forensics</span></td>
+      <td>CyberArk required</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Credential vaulting</td>
+      <td><span class="status status-no">No</span></td>
+      <td><span class="status status-yes">Yes -- encrypted vault</span></td>
+      <td>CyberArk required</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Automatic password rotation</td>
+      <td><span class="status status-no">No</span></td>
+      <td><span class="status status-yes">CPM -- scheduled rotation</span></td>
+      <td>CyberArk required</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Approval workflows</td>
+      <td><span class="status status-yes">Native (Entra Identity Governance)</span></td>
+      <td><span class="status status-yes">Native (+ ServiceNow integration)</span></td>
+      <td>Both -- separate trails</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Non-Microsoft systems (Linux, DB, network)</td>
+      <td><span class="status status-no">No</span></td>
+      <td><span class="status status-yes">Yes -- full infrastructure PAM</span></td>
+      <td>CyberArk required</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Multi-tenant MSP management console</td>
+      <td><span class="status status-yes">Lighthouse portal (free)</span></td>
+      <td><span class="status status-yes">MSP Hub (June 2025, licensed)</span></td>
+      <td>Both available</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Audit trail</td>
+      <td>PIM activation logs (who, when, role)</td>
+      <td>Full session forensics (what they did)</td>
+      <td>Complementary</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Azure resource JIT</td>
+      <td><span class="status status-yes">PIM for Azure roles (via Az Lighthouse)</span></td>
+      <td><span class="status status-yes">SIA for infrastructure</span></td>
+      <td>Both -- different scope</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Endpoint privilege elevation</td>
+      <td><span class="status status-no">No</span></td>
+      <td><span class="status status-yes">EPM -- application-level JIT</span></td>
+      <td>CyberArk only</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Break-glass credential management</td>
+      <td><span class="status status-partial">Basic (emergency access accounts)</span></td>
+      <td><span class="status status-yes">Full vault + dual control + rotation</span></td>
+      <td>CyberArk superior</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">License cost (MSP partner tenant)</td>
+      <td>Entra ID P2 (~$9/user/month)</td>
+      <td>CyberArk license (varies, typically higher)</td>
+      <td>PIM cheaper for M365-only</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Infrastructure overhead</td>
+      <td>Zero (SaaS)</td>
+      <td>Connector VM per customer (Privilege Cloud) or full server farm (self-hosted)</td>
+      <td>PIM simpler</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ==================== PROS AND CONS ==================== -->
+<h2>3. Pros and Cons</h2>
+
+<div class="comparison-grid">
+  <div class="comparison-card" style="border-top-color: var(--ms-blue);">
+    <h4 style="color:var(--ms-blue);">Entra PIM + Lighthouse -- Pros</h4>
+    <ul>
+      <li><strong>Only option for GDAP JIT</strong> -- no alternative exists</li>
+      <li><strong>Zero infrastructure</strong> -- fully SaaS, no connectors or VMs</li>
+      <li><strong>Native integration</strong> -- built into the same platform as GDAP, CA, Entra ID</li>
+      <li><strong>Lower cost</strong> -- Entra P2 only in the partner tenant (~$9/user/month)</li>
+      <li><strong>Lighthouse wizard</strong> -- simplified setup for GDAP templates with JIT</li>
+      <li><strong>Customer visibility</strong> -- PIM activations visible in customer audit logs</li>
+      <li><strong>Single identity plane</strong> -- no separate system to manage or break</li>
+    </ul>
+  </div>
+  <div class="comparison-card" style="border-top-color: var(--ms-blue);">
+    <h4 style="color:var(--ms-blue);">Entra PIM + Lighthouse -- Cons</h4>
+    <ul>
+      <li><strong>No session recording</strong> -- logs THAT a role activated, not WHAT user did</li>
+      <li><strong>No credential vaulting</strong> -- passwords visible to users if they know them</li>
+      <li><strong>No password rotation</strong> -- must be handled separately</li>
+      <li><strong>M365/Azure scope only</strong> -- cannot manage Linux, DB, network device access</li>
+      <li><strong>Template-wide JIT blast radius</strong> -- activates across all tenants in template</li>
+      <li><strong>No ServiceNow native integration</strong> -- requires Power Automate for ITSM</li>
+      <li><strong>Microsoft lock-in</strong> -- entire PAM posture depends on one vendor</li>
+    </ul>
+  </div>
+</div>
+
+<div class="comparison-grid">
+  <div class="comparison-card" style="border-top-color: var(--accent-orange);">
+    <h4 style="color:var(--accent-orange);">CyberArk -- Pros</h4>
+    <ul>
+      <li><strong>Session recording</strong> -- forensic-quality screen/keystroke capture for compliance</li>
+      <li><strong>Credential vaulting + rotation</strong> -- passwords never exposed to technicians</li>
+      <li><strong>Cross-platform</strong> -- Windows, Linux, databases, network devices, cloud</li>
+      <li><strong>Zero Standing Privilege (SIA)</strong> -- ephemeral accounts eliminated</li>
+      <li><strong>ServiceNow integration</strong> -- native approval workflow integration</li>
+      <li><strong>MSP Hub</strong> -- centralized multi-tenant management console</li>
+      <li><strong>Vendor-independent</strong> -- works across Microsoft, AWS, GCP, on-prem</li>
+      <li><strong>EPM</strong> -- endpoint privilege management that PIM cannot touch</li>
+    </ul>
+  </div>
+  <div class="comparison-card" style="border-top-color: var(--accent-orange);">
+    <h4 style="color:var(--accent-orange);">CyberArk -- Cons</h4>
+    <ul>
+      <li><strong>Cannot manage GDAP group membership</strong> -- fundamental architectural gap</li>
+      <li><strong>Higher cost</strong> -- CyberArk licensing + infrastructure + expertise</li>
+      <li><strong>Infrastructure required</strong> -- even Privilege Cloud needs connector VMs</li>
+      <li><strong>Complexity</strong> -- significant deployment and operational expertise needed</li>
+      <li><strong>No native PIM integration</strong> -- separate approval and audit workflows</li>
+      <li><strong>Potential user friction</strong> -- PSM proxy adds latency; some workflows feel different</li>
+      <li><strong>RDS licensing</strong> -- self-hosted PSM requires Microsoft RDS CALs (eliminated in Privilege Cloud)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ==================== HYBRID ARCHITECTURE ==================== -->
+<h2>4. Recommended Hybrid Architecture</h2>
+<p>For MSPs with existing CyberArk investments, the optimal approach layers both tools based on what each does best.</p>
+
+<h3>4a. Who Handles What</h3>
+<div class="card" style="overflow-x:auto;">
+  <table>
+    <tr><th>Access Scenario</th><th>Primary Tool</th><th>Why</th></tr>
+    <tr>
+      <td style="color:var(--text-primary);">M365 admin access to customer tenants (via GDAP)</td>
+      <td style="color:var(--ms-blue); font-weight:600;">Entra PIM</td>
+      <td>Only option -- GDAP group membership requires PIM</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Azure resource management (via Az Lighthouse)</td>
+      <td style="color:var(--ms-blue); font-weight:600;">Entra PIM</td>
+      <td>Native PIM for Azure roles via Lighthouse delegation</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Windows Server RDP (customer infrastructure)</td>
+      <td style="color:var(--accent-orange); font-weight:600;">CyberArk PSM/SIA</td>
+      <td>Session recording + credential vaulting + rotation</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Linux/Unix SSH access</td>
+      <td style="color:var(--accent-orange); font-weight:600;">CyberArk PSM/SIA</td>
+      <td>Ephemeral accounts, session recording</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Database admin (SQL, Oracle, etc.)</td>
+      <td style="color:var(--accent-orange); font-weight:600;">CyberArk SIA</td>
+      <td>Credential isolation, session recording</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Network device access (firewalls, switches)</td>
+      <td style="color:var(--accent-orange); font-weight:600;">CyberArk PSM</td>
+      <td>Shared credential management, session recording</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Break-glass / emergency accounts</td>
+      <td style="color:var(--accent-orange); font-weight:600;">CyberArk Vault</td>
+      <td>Dual control, rotation, sealed credential access</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Service accounts (automation, APIs)</td>
+      <td style="color:var(--accent-orange); font-weight:600;">CyberArk CPM</td>
+      <td>Automated rotation, no human access to credentials</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Endpoint local admin elevation</td>
+      <td style="color:var(--accent-orange); font-weight:600;">CyberArk EPM</td>
+      <td>Application-level JIT on managed endpoints</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">High-sensitivity M365 admin sessions (Purview Tier 1)</td>
+      <td style="color:var(--accent-purple); font-weight:600;">Both: PIM + CyberArk PSM</td>
+      <td>PIM activates the role; CyberArk records the session</td>
+    </tr>
+  </table>
+</div>
+
+<h3>4b. The "Both" Scenario: PIM + PSM for High-Sensitivity M365 Access</h3>
+<p>For the most sensitive roles (eDiscovery Admin, Compliance Data Admin, Global Admin), the hybrid approach uses both tools simultaneously:</p>
+<div class="card">
+  <div style="display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="flex-shrink:0; width:28px; height:28px; border-radius:50%; background:var(--ms-blue); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.8rem;">1</div>
+      <p style="margin:0;">Technician activates PIM group membership (GDAP role becomes active in customer tenant)</p>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="flex-shrink:0; width:28px; height:28px; border-radius:50%; background:var(--accent-orange); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.8rem;">2</div>
+      <p style="margin:0;">Technician launches browser session through CyberArk PSM (session isolation + recording begins)</p>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="flex-shrink:0; width:28px; height:28px; border-radius:50%; background:var(--accent-purple); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.8rem;">3</div>
+      <p style="margin:0;">Technician performs admin work in customer tenant -- all actions recorded by PSM</p>
+    </div>
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div style="flex-shrink:0; width:28px; height:28px; border-radius:50%; background:var(--ms-blue); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.8rem;">4</div>
+      <p style="margin:0;">PIM membership auto-expires (GDAP access revoked automatically)</p>
+    </div>
+  </div>
+  <p style="margin-top:16px; color:var(--text-muted); font-size:0.85rem;"><strong>Audit trail:</strong> PIM logs capture role activation/deactivation. CyberArk PSM captures the full session recording. Entra audit logs capture the specific admin actions. Three layers of evidence.</p>
+</div>
+
+<!-- ==================== DECISION FRAMEWORK ==================== -->
+<h2>5. Decision Framework: When to Use What</h2>
+
+<div class="scenario">
+  <div class="scenario-icon scenario-ms">PIM</div>
+  <div class="scenario-content">
+    <h4>Scenario: Pure M365/Azure MSP (no on-prem, no non-Microsoft systems)</h4>
+    <p><strong>Use PIM + Lighthouse only.</strong> CyberArk adds cost and complexity without addressing a gap that matters for your environment. Entra P2 in the partner tenant is sufficient. Consider CyberArk only if you need session recording for compliance (SOC 2 "what did they do" requirement).</p>
+  </div>
+</div>
+
+<div class="scenario">
+  <div class="scenario-icon scenario-both">Both</div>
+  <div class="scenario-content">
+    <h4>Scenario: MSP with CyberArk already deployed for infrastructure PAM</h4>
+    <p><strong>Use both in the hybrid model.</strong> PIM handles GDAP access (it has to). CyberArk handles everything it already handles (servers, databases, network devices). Add PSM session recording for high-sensitivity M365 roles if compliance requires it. No new CyberArk licensing needed if you already have Privilege Cloud -- just extend configuration.</p>
+  </div>
+</div>
+
+<div class="scenario">
+  <div class="scenario-icon scenario-both">Both</div>
+  <div class="scenario-content">
+    <h4>Scenario: MSP in regulated industry (HIPAA, SOX, PCI, CMMC)</h4>
+    <p><strong>Use both -- session recording is likely required.</strong> PIM provides the JIT access control. CyberArk PSM provides the session recording that auditors want. The "what did the admin do" question cannot be answered by PIM alone. Budget for CyberArk Privilege Cloud SaaS to minimize infrastructure overhead.</p>
+  </div>
+</div>
+
+<div class="scenario">
+  <div class="scenario-icon scenario-ca">CA</div>
+  <div class="scenario-content">
+    <h4>Scenario: MSP evaluating CyberArk as a replacement for all PAM</h4>
+    <p><strong>CyberArk cannot replace PIM for GDAP.</strong> You still need Entra P2 and PIM for Groups. CyberArk can be the primary PAM for everything else, but the GDAP layer must go through PIM. Plan your architecture and licensing accordingly -- do not assume CyberArk eliminates the Entra P2 requirement.</p>
+  </div>
+</div>
+
+<!-- ==================== COST ANALYSIS ==================== -->
+<h2>6. Cost and Friction Analysis</h2>
+
+<h3>6a. License Cost Comparison</h3>
+<div class="card">
+  <table>
+    <tr><th>Approach</th><th>Partner Tenant Cost</th><th>Infrastructure</th><th>Covers</th></tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">PIM Only</td>
+      <td>~$9/user/month (Entra P2)</td>
+      <td>None (SaaS)</td>
+      <td>M365/Azure GDAP JIT only</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">CyberArk Privilege Cloud Only</td>
+      <td>CyberArk license (varies) + Entra P2 (still required for GDAP)</td>
+      <td>1 connector VM per customer (~4 vCPU)</td>
+      <td>Infrastructure PAM + session recording (but NOT GDAP JIT)</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Hybrid (Recommended)</td>
+      <td>Entra P2 + CyberArk license</td>
+      <td>1 connector VM per customer</td>
+      <td>Full coverage: GDAP JIT + infrastructure + session recording</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">CyberArk Self-Hosted</td>
+      <td>Entra P2 + CyberArk license + RDS CALs</td>
+      <td>Full server farm (vault, CPM, PSM)</td>
+      <td>Same as hybrid but with higher infrastructure costs</td>
+    </tr>
+  </table>
+  <p style="color:var(--accent-yellow); font-size:0.85rem; margin-top:12px; font-weight:600;">Key insight: Entra P2 is required regardless of CyberArk presence. You cannot avoid it if you use GDAP with JIT.</p>
+</div>
+
+<h3>6b. Operational Friction Assessment</h3>
+<div class="card">
+  <table>
+    <tr><th>Workflow</th><th>PIM Only</th><th>CyberArk Only</th><th>Hybrid</th></tr>
+    <tr>
+      <td style="color:var(--text-primary);">Daily Tier 1 help desk work</td>
+      <td>PIM auto-activate (low friction)</td>
+      <td>N/A (CyberArk cannot do GDAP JIT)</td>
+      <td>PIM auto-activate (low friction)</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Tier 2 Exchange/Intune admin</td>
+      <td>PIM + justification (moderate)</td>
+      <td>N/A</td>
+      <td>PIM + justification (moderate)</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Tier 3 high-privilege M365</td>
+      <td>PIM + approval (moderate)</td>
+      <td>N/A</td>
+      <td>PIM + approval, then PSM session (higher, but justified for risk)</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Server RDP (customer infra)</td>
+      <td>N/A (PIM is M365 only)</td>
+      <td>CyberArk PSM (moderate)</td>
+      <td>CyberArk PSM (moderate)</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Linux SSH (customer infra)</td>
+      <td>N/A</td>
+      <td>CyberArk SIA (low -- ephemeral)</td>
+      <td>CyberArk SIA (low)</td>
+    </tr>
+  </table>
+  <p style="color:var(--text-muted); font-size:0.85rem; margin-top:8px;">The hybrid model adds friction <strong>only</strong> for Tier 3 M365 sessions (PIM activation + PSM launch). This affects ~5-8 people performing rare escalations. 85%+ of daily work (Tier 1/2) sees no additional friction beyond PIM activation.</p>
+</div>
+
+<!-- ==================== INTEGRATION POINTS ==================== -->
+<h2>7. Integration Points (Connecting the Two Systems)</h2>
+
+<div class="alert alert-yellow">
+  <div class="alert-title">No Native PIM-CyberArk Integration Exists</div>
+  <p>There is currently no out-of-the-box integration between Entra PIM approval workflows and CyberArk approval workflows. They operate as independent systems with separate audit trails. Integration requires custom work via ServiceNow or Power Automate.</p>
+</div>
+
+<h3>7a. ServiceNow as the Common Broker</h3>
+<div class="card">
+  <p>For MSPs using ServiceNow as their ITSM platform, it can serve as a unifying layer:</p>
+  <table>
+    <tr><th>Integration</th><th>How</th><th>Result</th></tr>
+    <tr>
+      <td style="color:var(--text-primary);">CyberArk --> ServiceNow</td>
+      <td>Native CyberArk integration -- credential checkout requires a ServiceNow ticket</td>
+      <td>All CyberArk access tied to trackable tickets</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">PIM --> ServiceNow</td>
+      <td>Power Automate triggered on PIM activation events creates corresponding ServiceNow records</td>
+      <td>All PIM activations tied to trackable tickets</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">ServiceNow = single source of truth</td>
+      <td>Both CyberArk and PIM events flow to ServiceNow</td>
+      <td>Unified audit trail for all privileged access, regardless of tool</td>
+    </tr>
+  </table>
+</div>
+
+<h3>7b. Sentinel as the Unified Monitoring Layer</h3>
+<div class="card">
+  <p>Microsoft Sentinel can ingest audit data from both systems:</p>
+  <table>
+    <tr><th>Source</th><th>What Flows to Sentinel</th><th>How</th></tr>
+    <tr>
+      <td style="color:var(--text-primary);">Entra PIM</td>
+      <td>Role activations, approvals, expirations</td>
+      <td>Entra ID data connector (native)</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">CyberArk Privilege Cloud</td>
+      <td>Credential checkouts, session starts/stops, policy violations</td>
+      <td>CyberArk Sentinel data connector or Syslog/CEF forwarding</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Correlation</td>
+      <td>Cross-reference PIM activations with CyberArk sessions</td>
+      <td>KQL join on timestamp + user identity</td>
+    </tr>
+  </table>
+</div>
+
+<!-- ==================== RECOMMENDATIONS ==================== -->
+<h2>8. Recommendations by MSP Profile</h2>
+
+<div class="card">
+  <table>
+    <tr><th>MSP Profile</th><th>Recommendation</th><th>Cost Optimization</th></tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Small MSP, M365-only, no compliance requirements</td>
+      <td>PIM + Lighthouse only</td>
+      <td>Entra P2 for admin accounts only (not all users). Lighthouse is free.</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Mid-size MSP, M365 + some Azure, SOC 2 required</td>
+      <td>PIM + CyberArk Privilege Cloud (Tier 1 PSM only)</td>
+      <td>PSM recording only for top ~12 roles. Privilege Cloud minimizes infrastructure.</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Large MSP, M365 + Azure + infrastructure, regulated customers</td>
+      <td>Full hybrid: PIM + CyberArk Privilege Cloud (all tiers)</td>
+      <td>CyberArk MSP Hub for centralized management. SIA connectors per customer.</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Enterprise MSP with existing CyberArk self-hosted</td>
+      <td>Migrate to Privilege Cloud SaaS + PIM for GDAP</td>
+      <td>16-32x PSM infrastructure reduction. Eliminate RDS CALs. Keep self-hosted only for air-gapped customers.</td>
+    </tr>
+  </table>
+</div>
+
+<div class="verdict">
+  <div class="verdict-label">Final Verdict</div>
+  <div class="verdict-text">PIM is required. CyberArk is complementary. Use both where the risk and compliance requirements justify the investment. Do not over-engineer: 85% of daily MSP work needs only PIM.</div>
+</div>
+
+</div>
+
+<footer style="text-align:center; padding:24px; color:var(--text-muted); font-size:0.8rem; border-top:1px solid var(--border-color);">
+  Based on Microsoft Learn GDAP documentation, CyberArk product documentation, and MSP operational research. Prepared 2026-04-07.
+</footer>
+</body>
+</html>

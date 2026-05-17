@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Microsoft Lighthouse - Security Controls Dashboard</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-surface: #161b22;
+    --bg-elevated: #1c2129;
+    --border-color: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-yellow: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-orange: #d18616;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg-primary); color: var(--text-primary); line-height: 1.6;
+  }
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px 60px; }
+  header {
+    background: linear-gradient(135deg, #0d1b2a 0%, #1b263b 50%, #0d1117 100%);
+    border-bottom: 3px solid var(--accent-green);
+    padding: 40px 24px; text-align: center;
+  }
+  header h1 { font-size: 2rem; font-weight: 700; margin-bottom: 8px; }
+  header .subtitle { color: var(--text-secondary); font-size: 1.1rem; }
+  header .meta { color: var(--text-muted); font-size: 0.85rem; margin-top: 12px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .badge-security { background: #1a3a1a; color: var(--accent-green); }
+  h2 { font-size: 1.5rem; font-weight: 600; margin: 40px 0 20px; padding-bottom: 8px; border-bottom: 2px solid var(--border-color); color: var(--accent-green); }
+  h3 { font-size: 1.15rem; font-weight: 600; margin: 24px 0 12px; color: var(--text-primary); }
+  h4 { font-size: 1rem; font-weight: 600; margin: 16px 0 8px; color: var(--accent-blue); }
+  .card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 24px; margin: 16px 0; }
+  p.desc { color: var(--text-secondary); margin-bottom: 16px; font-size: 0.95rem; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9rem; }
+  th { background: var(--bg-elevated); text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border-color); font-weight: 600; color: var(--accent-blue); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); }
+  tr:hover td { background: rgba(63, 185, 80, 0.04); }
+
+  .status { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+  .status-yes { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }
+  .status-no { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }
+  .status-partial { background: rgba(210, 153, 34, 0.15); color: var(--accent-yellow); }
+  .status-na { background: rgba(110, 118, 129, 0.15); color: var(--text-muted); }
+
+  .alert { border-radius: 8px; padding: 16px 20px; margin: 16px 0; border-left: 4px solid; }
+  .alert-red { background: rgba(248, 81, 73, 0.08); border-color: var(--accent-red); }
+  .alert-yellow { background: rgba(210, 153, 34, 0.08); border-color: var(--accent-yellow); }
+  .alert-blue { background: rgba(88, 166, 255, 0.08); border-color: var(--accent-blue); }
+  .alert-green { background: rgba(63, 185, 80, 0.08); border-color: var(--accent-green); }
+  .alert-title { font-weight: 700; margin-bottom: 4px; }
+  .alert-red .alert-title { color: var(--accent-red); }
+  .alert-yellow .alert-title { color: var(--accent-yellow); }
+  .alert-blue .alert-title { color: var(--accent-blue); }
+  .alert-green .alert-title { color: var(--accent-green); }
+  .alert p { color: var(--text-secondary); font-size: 0.9rem; }
+
+  .code-block { background: #0d1117; border: 1px solid var(--border-color); border-radius: 6px; padding: 16px; margin: 12px 0; overflow-x: auto; font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace; font-size: 0.85rem; line-height: 1.5; color: #e6edf3; white-space: pre; }
+  .code-label { font-size: 0.8rem; font-weight: 600; color: var(--accent-purple); margin-bottom: 4px; }
+  .code-comment { color: var(--text-muted); }
+  .code-keyword { color: var(--accent-blue); }
+  .code-string { color: var(--accent-green); }
+  .code-op { color: var(--accent-orange); }
+
+  .steps { counter-reset: step; }
+  .step { display: flex; gap: 16px; margin: 12px 0; align-items: flex-start; }
+  .step::before { counter-increment: step; content: counter(step); flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-blue); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; }
+  .step-content { flex: 1; }
+  .step-content p { color: var(--text-secondary); font-size: 0.9rem; }
+
+  .comparison-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+  .comparison-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; }
+  .comparison-card h4 { margin-top: 0; }
+
+  details { margin: 12px 0; }
+  summary { cursor: pointer; padding: 12px 16px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; font-weight: 600; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "+ "; color: var(--accent-green); font-weight: 700; }
+  details[open] summary::before { content: "- "; }
+  details[open] summary { border-radius: 8px 8px 0 0; border-bottom-color: transparent; }
+  .detail-content { padding: 16px; background: var(--bg-surface); border: 1px solid var(--border-color); border-top: none; border-radius: 0 0 8px 8px; }
+
+  .mfa-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin: 12px 0; }
+  .mfa-card { background: var(--bg-elevated); border: 1px solid var(--border-color); border-radius: 8px; padding: 14px; display: flex; align-items: center; gap: 12px; }
+  .mfa-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .mfa-dot.yes { background: var(--accent-green); }
+  .mfa-dot.no { background: var(--accent-red); }
+  .mfa-label { font-size: 0.9rem; }
+  .mfa-sub { font-size: 0.75rem; color: var(--text-muted); }
+
+  @media (max-width: 768px) {
+    .comparison-grid { grid-template-columns: 1fr; }
+    header h1 { font-size: 1.5rem; }
+  }
+  @media print {
+    body { background: #fff; color: #111; }
+    .card, .comparison-card, summary, .detail-content { background: #f8f8f8; border-color: #ddd; }
+    header { background: #f0f0f0; border-color: #333; }
+    h2, h3, h4, header h1 { color: #111; }
+    th { background: #e8e8e8; color: #111; }
+    td { color: #444; }
+    .code-block { background: #f5f5f5; color: #111; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div style="margin-bottom:8px;"><span class="badge badge-security">Security Controls</span></div>
+  <h1>Security Controls Dashboard</h1>
+  <div class="subtitle">Conditional Access | PAM/JIT | Auditing | Monitoring | Device Trust</div>
+  <div class="meta">Prepared 2026-03-30 | Microsoft 365 Lighthouse / GDAP for MSPs</div>
+</header>
+
+<div class="container">
+
+<!-- ==================== SECTION 1: CONDITIONAL ACCESS ==================== -->
+<h2>1. Conditional Access Controls</h2>
+
+<h3>1a. Cross-Tenant Access Settings</h3>
+<p class="desc">The customer tenant controls what trust is extended to the MSP partner tenant through three inbound trust checkboxes.</p>
+
+<div class="card">
+  <table>
+    <tr><th>Trust Setting</th><th>Effect When Enabled</th><th>Security Implication</th></tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Trust MFA</td>
+      <td>Accept MFA claims from the partner's home tenant</td>
+      <td>MSP technician does not re-authenticate in customer tenant</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Trust Compliant Devices</td>
+      <td>Accept Intune device compliance from partner tenant</td>
+      <td>Customer trusts MSP's Intune compliance policies</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Trust Hybrid-Joined Devices</td>
+      <td>Accept Entra hybrid join status from partner tenant</td>
+      <td>Customer trusts MSP's on-prem AD + device management</td>
+    </tr>
+  </table>
+</div>
+
+<div class="alert alert-red">
+  <div class="alert-title">CRITICAL: GDAP MFA Trust Override</div>
+  <p>For GDAP relationships (service provider access type), MFA from the partner's home tenant is <strong>ALWAYS trusted</strong> in the customer tenant -- regardless of whether the "Trust MFA" checkbox is enabled. This is a hardcoded behavior in the GDAP authentication flow. Customers cannot override it. This means the MSP's MFA security posture directly becomes the customer's MFA security posture for delegated access.</p>
+</div>
+
+<h3>1b. US-Only Geo-Fencing</h3>
+<p class="desc">Restricting MSP access to US-based IP addresses only. Target CA policy to the "Service provider" user type scoped to the MSP's tenant ID.</p>
+
+<div class="card">
+  <div class="steps">
+    <div class="step"><div class="step-content"><p><strong>Create Named Location</strong> -- In Entra ID > Conditional Access > Named Locations, create "United States" using IP-based geolocation (Microsoft's country-to-IP mapping).</p></div></div>
+    <div class="step"><div class="step-content"><p><strong>Create CA Policy</strong> -- Target: "Service provider" user type. Scope to the MSP's specific tenant ID. Apply to "All cloud apps."</p></div></div>
+    <div class="step"><div class="step-content"><p><strong>Set Condition</strong> -- Locations > Include: "Any location." Exclude: "United States" named location.</p></div></div>
+    <div class="step"><div class="step-content"><p><strong>Set Grant</strong> -- "Block access." This blocks all MSP access from non-US IP addresses.</p></div></div>
+  </div>
+</div>
+
+<div class="alert alert-yellow">
+  <div class="alert-title">WARNING: VPN/Proxy Bypass Risk</div>
+  <p>IP-based geo-fencing can be bypassed if the MSP technician uses a US-based VPN or proxy. The customer's CA policy sees the VPN exit IP, not the user's physical location. Mitigation: Deploy Microsoft Global Secure Access with source IP restoration to use the original client IP rather than the proxy IP.</p>
+</div>
+
+<h3>1c. Phishing-Resistant MFA Methods</h3>
+<p class="desc">Authentication strength policies can require phishing-resistant methods for MSP partner access.</p>
+
+<div class="mfa-grid">
+  <div class="mfa-card"><div class="mfa-dot yes"></div><div><div class="mfa-label">FIDO2 Security Keys</div><div class="mfa-sub">Phishing-resistant -- ACCEPTED</div></div></div>
+  <div class="mfa-card"><div class="mfa-dot yes"></div><div><div class="mfa-label">Windows Hello for Business</div><div class="mfa-sub">Phishing-resistant -- ACCEPTED</div></div></div>
+  <div class="mfa-card"><div class="mfa-dot yes"></div><div><div class="mfa-label">Entra Certificate-Based MFA</div><div class="mfa-sub">Phishing-resistant -- ACCEPTED</div></div></div>
+  <div class="mfa-card"><div class="mfa-dot no"></div><div><div class="mfa-label">Microsoft Authenticator (push)</div><div class="mfa-sub">Not phishing-resistant</div></div></div>
+  <div class="mfa-card"><div class="mfa-dot no"></div><div><div class="mfa-label">SMS / Phone Call</div><div class="mfa-sub">Not phishing-resistant</div></div></div>
+  <div class="mfa-card"><div class="mfa-dot no"></div><div><div class="mfa-label">OATH Hardware Tokens</div><div class="mfa-sub">Accepted in home tenant, not for resource tenant direct MFA</div></div></div>
+</div>
+
+<h3>1d. Session Controls</h3>
+<div class="card">
+  <table>
+    <tr><th>Control</th><th>Recommended Setting</th><th>Notes</th></tr>
+    <tr><td style="color:var(--text-primary);">Sign-in Frequency</td><td style="color:var(--accent-green); font-weight:600;">4 hours</td><td>Forces re-authentication during long admin sessions</td></tr>
+    <tr><td style="color:var(--text-primary);">Persistent Browser Session</td><td style="color:var(--accent-red); font-weight:600;">Never</td><td>Prevents cached sessions on shared MSP workstations</td></tr>
+    <tr><td style="color:var(--text-primary);">Applies to B2B Collaboration</td><td><span class="status status-yes">YES</span></td><td>Service provider user type inherits B2B collab behavior</td></tr>
+    <tr><td style="color:var(--text-primary);">Applies to B2B Direct Connect</td><td><span class="status status-no">NO</span></td><td>Direct connect users are not affected by session controls</td></tr>
+  </table>
+</div>
+
+<h3>1e. Device Compliance for Partner Access</h3>
+<div class="alert alert-blue">
+  <div class="alert-title">Device Trust Requires Explicit Opt-In</div>
+  <p>MSP devices are enrolled in the MSP's Intune instance, not the customer's. Without the "Trust compliant devices" checkbox enabled in inbound cross-tenant access settings, any CA policy requiring device compliance will <strong>block ALL MSP technicians</strong>. The customer must explicitly choose to trust the MSP's device compliance claims.</p>
+</div>
+
+<h3>1f. License Requirements</h3>
+<div class="card">
+  <table>
+    <tr><th>Capability</th><th>License Required</th><th>Where</th></tr>
+    <tr><td style="color:var(--text-primary);">Cross-tenant trust settings customization</td><td>Entra ID P1</td><td>Customer tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">Per-organization CA policy customization</td><td>Entra ID P1</td><td>Customer tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">PIM for Groups (JIT access)</td><td>Entra ID P2 / M365 E5</td><td>Partner (MSP) tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">B2B direct connect trust</td><td>Entra ID P1</td><td>Both tenants</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 2: PAM / JIT ==================== -->
+<h2>2. Privileged Access Management / JIT</h2>
+
+<h3>2a. Entra PIM for GDAP (Native JIT)</h3>
+<div class="alert alert-green">
+  <div class="alert-title">PIM for Groups = The ONLY Mechanism for GDAP JIT</div>
+  <p>No external tool -- including CyberArk -- can grant or revoke GDAP security group membership. Entra PIM is the native and only production-grade option for controlling just-in-time access to GDAP roles. CyberArk cannot replace it for this specific function.</p>
+</div>
+
+<div class="card">
+  <h4>Three-Tier PIM Model</h4>
+  <table>
+    <tr><th>Tier</th><th>Approval</th><th>Duration</th><th>MFA</th><th>Use Case</th></tr>
+    <tr>
+      <td><span class="status status-yes">Tier 1</span></td>
+      <td>Auto-activation</td>
+      <td>8-10 hours</td>
+      <td>Required</td>
+      <td>Daily help desk operations</td>
+    </tr>
+    <tr>
+      <td><span class="status status-partial">Tier 2</span></td>
+      <td>Ticket justification</td>
+      <td>1-2 hours</td>
+      <td>Re-auth required</td>
+      <td>Workload-specific admin</td>
+    </tr>
+    <tr>
+      <td><span class="status status-no">Tier 3</span></td>
+      <td>Human approver</td>
+      <td>&lt;1 hour</td>
+      <td>Re-auth required</td>
+      <td>Rare escalations</td>
+    </tr>
+  </table>
+</div>
+
+<h3>2b. CyberArk vs. Entra PIM Comparison</h3>
+<div class="card" style="overflow-x:auto;">
+  <table>
+    <tr><th>Capability</th><th>Entra PIM</th><th>CyberArk</th></tr>
+    <tr><td style="color:var(--text-primary);">GDAP group membership JIT</td><td><span class="status status-yes">YES (only option)</span></td><td><span class="status status-no">NO</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Session recording</td><td><span class="status status-no">NO</span></td><td><span class="status status-yes">YES (PSM)</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Credential vaulting</td><td><span class="status status-no">NO</span></td><td><span class="status status-yes">YES</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Password rotation</td><td><span class="status status-no">NO</span></td><td><span class="status status-yes">YES</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Non-Microsoft systems</td><td><span class="status status-no">NO</span></td><td><span class="status status-yes">YES</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Approval workflows</td><td><span class="status status-yes">YES (native)</span></td><td><span class="status status-yes">YES (separate)</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Audit trail</td><td>PIM activation logs</td><td>Full session forensics</td></tr>
+    <tr><td style="color:var(--text-primary);">Multi-tenant MSP console</td><td>Lighthouse</td><td>MSP Hub (June 2025)</td></tr>
+    <tr><td style="color:var(--text-primary);">Licensing</td><td>Entra P2</td><td>CyberArk license</td></tr>
+  </table>
+</div>
+
+<h3>2c. Hybrid PAM Architecture</h3>
+<div class="comparison-grid">
+  <div class="comparison-card" style="border-left: 4px solid var(--accent-blue);">
+    <h4 style="color:var(--accent-blue);">Entra PIM Handles</h4>
+    <ul style="color:var(--text-secondary); padding-left:20px; font-size:0.9rem;">
+      <li>GDAP security group JIT activation</li>
+      <li>Role eligibility and time-bound activation</li>
+      <li>Approval workflows for high-privilege roles</li>
+      <li>Activation audit logging</li>
+      <li>Microsoft 365 / Entra ID scope</li>
+    </ul>
+  </div>
+  <div class="comparison-card" style="border-left: 4px solid var(--accent-purple);">
+    <h4 style="color:var(--accent-purple);">CyberArk Handles</h4>
+    <ul style="color:var(--text-secondary); padding-left:20px; font-size:0.9rem;">
+      <li>Credential vaulting and rotation</li>
+      <li>Full session recording (screen, keystrokes, commands)</li>
+      <li>Non-Microsoft system access (Linux, network, DB)</li>
+      <li>Break-glass credential management</li>
+      <li>PSM for forensic audit compliance</li>
+    </ul>
+  </div>
+</div>
+
+<div class="alert alert-yellow">
+  <div class="alert-title">No Native Integration</div>
+  <p>There is no native integration between Entra PIM approval workflows and CyberArk approval workflows. They run as parallel systems with separate audit trails. Organizations operating both must maintain two approval and review processes.</p>
+</div>
+
+<h3>2d. Session Recording Gap</h3>
+<div class="alert alert-red">
+  <div class="alert-title">PIM Records "THAT" -- Not "WHAT"</div>
+  <p>PIM logs that a role was activated (who, when, which role, justification). It does NOT record what the user did after activation. CyberArk PSM provides forensic session recording (screen capture, keystroke logging, command recording) required for SOC 2, ISO 27001, and NIST audit compliance. Organizations requiring full session forensics must implement CyberArk PSM or equivalent alongside PIM.</p>
+</div>
+
+<!-- ==================== SECTION 3: AUDITING ==================== -->
+<h2>3. Auditing &amp; Monitoring</h2>
+
+<h3>3a. Log Sources Matrix</h3>
+<div class="card" style="overflow-x:auto;">
+  <table>
+    <tr><th>Log Source</th><th>What It Captures</th><th>MSP Identity Display</th><th>Key Field</th></tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Entra Sign-in Logs</td>
+      <td>Authentication events</td>
+      <td>"[Partner] Technician"</td>
+      <td><code>CrossTenantAccessType = "serviceProvider"</code></td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Entra Audit Logs</td>
+      <td>Admin changes (user/group/role/policy)</td>
+      <td>Masked UPN</td>
+      <td><code>InitiatedBy</code> sub-fields</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Purview Unified Audit</td>
+      <td>All M365 activity</td>
+      <td>"[Partner] Technician"</td>
+      <td><code>UserType = 9</code> ("PartnerTechnician")</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Partner Center Activity</td>
+      <td>GDAP relationship lifecycle</td>
+      <td>Full partner details</td>
+      <td>Action type field</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Lighthouse Audit Logs</td>
+      <td>Lighthouse portal actions</td>
+      <td>Partner user identity</td>
+      <td>4 log categories</td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary); font-weight:600;">Azure Activity Log</td>
+      <td>Azure resource changes (via Az Lighthouse)</td>
+      <td>Full detail (caller, IP, action)</td>
+      <td>Caller and action fields</td>
+    </tr>
+  </table>
+</div>
+
+<h3>3b. Sentinel KQL Queries</h3>
+
+<details>
+  <summary>KQL: Service Provider Sign-in Filtering</summary>
+  <div class="detail-content">
+    <div class="code-label">Filter Entra sign-in logs for MSP partner access</div>
+    <div class="code-block">SigninLogs
+| <span class="code-keyword">where</span> CrossTenantAccessType == <span class="code-string">"serviceProvider"</span>
+| <span class="code-keyword">project</span> TimeGenerated, UserDisplayName, UserPrincipalName,
+         IPAddress, Location, HomeTenantId,
+         ResourceTenantId, AppDisplayName, Status
+| <span class="code-keyword">sort by</span> TimeGenerated <span class="code-keyword">desc</span></div>
+  </div>
+</details>
+
+<details>
+  <summary>KQL: Privileged Role Assignment Detection</summary>
+  <div class="detail-content">
+    <div class="code-label">Detect when GDAP partners assign or activate privileged roles</div>
+    <div class="code-block">AuditLogs
+| <span class="code-keyword">where</span> OperationName <span class="code-keyword">has_any</span> (<span class="code-string">"Add member to role"</span>, <span class="code-string">"Add eligible member to role"</span>)
+| <span class="code-keyword">where</span> InitiatedBy.user.userPrincipalName <span class="code-keyword">has</span> <span class="code-string">"#EXT#"</span>
+    <span class="code-keyword">or</span> InitiatedBy.user.userPrincipalName == <span class="code-string">""</span>
+| <span class="code-keyword">extend</span> TargetRole = tostring(TargetResources[0].displayName)
+| <span class="code-keyword">project</span> TimeGenerated, OperationName, TargetRole,
+         InitiatedBy, Result
+| <span class="code-keyword">sort by</span> TimeGenerated <span class="code-keyword">desc</span></div>
+  </div>
+</details>
+
+<details>
+  <summary>KQL: Azure Lighthouse Delegation Changes</summary>
+  <div class="detail-content">
+    <div class="code-label">Monitor additions and deletions of Lighthouse registration assignments</div>
+    <div class="code-block">AzureActivity
+| <span class="code-keyword">where</span> OperationNameValue =~ <span class="code-string">"Microsoft.ManagedServices/registrationAssignments/write"</span>
+    <span class="code-keyword">or</span> OperationNameValue =~ <span class="code-string">"Microsoft.ManagedServices/registrationAssignments/delete"</span>
+| <span class="code-keyword">project</span> TimeGenerated, Caller, CallerIpAddress,
+         OperationNameValue, ActivityStatusValue,
+         ResourceGroup, SubscriptionId
+| <span class="code-keyword">sort by</span> TimeGenerated <span class="code-keyword">desc</span></div>
+  </div>
+</details>
+
+<details>
+  <summary>KQL: Cross-Workspace Multi-Tenant Hunting</summary>
+  <div class="detail-content">
+    <div class="code-label">Query across up to 20 customer workspaces simultaneously</div>
+    <div class="code-block"><span class="code-keyword">union</span>
+  workspace(<span class="code-string">"customer-a-workspace"</span>).SigninLogs,
+  workspace(<span class="code-string">"customer-b-workspace"</span>).SigninLogs,
+  workspace(<span class="code-string">"customer-c-workspace"</span>).SigninLogs
+| <span class="code-keyword">where</span> CrossTenantAccessType == <span class="code-string">"serviceProvider"</span>
+| <span class="code-keyword">where</span> ResultType != <span class="code-string">"0"</span> <span class="code-comment">// Failed sign-ins</span>
+| <span class="code-keyword">summarize</span> FailedAttempts = count() <span class="code-keyword">by</span> UserPrincipalName, IPAddress, bin(TimeGenerated, 1h)
+| <span class="code-keyword">where</span> FailedAttempts > 5</div>
+  </div>
+</details>
+
+<h3>3c. Lighthouse Alerting Scope</h3>
+<div class="card">
+  <table>
+    <tr><th>Alert Source</th><th>Supported in Lighthouse</th></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Business</td><td><span class="status status-yes">YES</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Defender Antivirus</td><td><span class="status status-yes">YES</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Entra ID Protection</td><td><span class="status status-yes">YES</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Cloud Apps (MCAS)</td><td><span class="status status-no">NO</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Office 365</td><td><span class="status status-no">NO</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Azure Service Alerts</td><td><span class="status status-no">NO</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Custom Sentinel Analytics Rules</td><td><span class="status status-no">NO</span></td></tr>
+  </table>
+  <p style="color:var(--accent-yellow); font-size:0.85rem; margin-top:12px; font-weight:600;">Conclusion: Sentinel is required for comprehensive MSP monitoring. Lighthouse alerts alone are insufficient.</p>
+</div>
+
+<h3>3d. Critical Audit Gaps</h3>
+<div class="alert alert-red">
+  <div class="alert-title">Purview Interactive Search NOT Supported via GDAP</div>
+  <p>The "Search audit log" operation in the Purview compliance portal does not work for GDAP-authenticated users because the identity does not exist as a user object in the customer tenant. Workarounds: PowerShell (Search-UnifiedAuditLog), Office 365 Management Activity API, or a dedicated user account in the customer directory.</p>
+</div>
+<div class="alert alert-yellow">
+  <div class="alert-title">MSP Technician Identity Redacted</div>
+  <p>Customer-facing logs display MSP technicians as "[Partner Name] Technician" -- individual names are privacy-redacted. The user's object ID is present in the log record, but correlating it to a specific person requires the MSP to look up the object ID in their own tenant. Forensic investigations require MSP cooperation.</p>
+</div>
+<div class="alert alert-blue">
+  <div class="alert-title">Preview: Native GDAP Sentinel Access (April 2026)</div>
+  <p>A new consent-based three-way handshake model is entering preview that allows GDAP-based Sentinel access directly through the Defender portal, as an alternative to the current Azure Lighthouse delegation model for Sentinel workspace access.</p>
+</div>
+
+<!-- ==================== SECTION 4: PRT & DEVICE TRUST ==================== -->
+<h2>4. PRT &amp; Device Trust</h2>
+
+<h3>4a. PRT Authentication Flow for MSP Access</h3>
+<div class="card">
+  <div class="steps">
+    <div class="step"><div class="step-content"><p><strong>Windows Login</strong> -- MSP technician logs into their device. CloudAP plugin issues PRT request to partner tenant's Entra ID. PRT is bound to the device's TPM 2.0 chip (session key never leaves hardware).</p></div></div>
+    <div class="step"><div class="step-content"><p><strong>Lighthouse Portal Access</strong> -- Technician navigates to lighthouse.microsoft.com. WAM broker intercepts the auth request and presents PRT + TPM-signed proof-of-possession.</p></div></div>
+    <div class="step"><div class="step-content"><p><strong>Cross-Tenant Auth</strong> -- Entra ID validates PRT claims: device ID, MFA claim, device compliance, location. Issues access token scoped to the customer tenant via GDAP relationship.</p></div></div>
+    <div class="step"><div class="step-content"><p><strong>Customer CA Evaluation</strong> -- Customer tenant's Conditional Access evaluates the token. Trust settings determine which partner claims are honored (device compliance, MFA). GDAP MFA is always trusted.</p></div></div>
+    <div class="step"><div class="step-content"><p><strong>Access Granted</strong> -- Technician accesses customer resources with the Entra roles assigned to their GDAP security group. Session subject to customer's session lifetime controls.</p></div></div>
+  </div>
+</div>
+
+<h3>4b. PRT Security Risks (MSP-Specific)</h3>
+<div class="alert alert-red">
+  <div class="alert-title">Pass-the-PRT Attack</div>
+  <p>If a PRT is extracted from an MSP technician's device, the attacker gains SSO to ALL customer tenants the technician has GDAP access to. The blast radius is the entire MSP portfolio, not a single customer.</p>
+</div>
+
+<div class="card">
+  <table>
+    <tr><th>Defense Layer</th><th>Mechanism</th><th>Effectiveness</th></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">TPM 2.0 Hardware Binding</td><td>PRT session key material stored in TPM; cannot be extracted via software</td><td><span class="status status-yes">PRIMARY</span></td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">Credential Guard</td><td>Process isolation prevents memory scraping of PRT from LSASS</td><td><span class="status status-partial">SECONDARY</span></td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">Token Protection (Preview)</td><td>Binds access tokens to the specific device, preventing token replay</td><td><span class="status status-partial">EMERGING</span></td></tr>
+    <tr><td style="color:var(--text-primary); font-weight:600;">PIM JIT</td><td>Even with stolen PRT, attacker must complete MFA and approval to activate roles</td><td><span class="status status-yes">CRITICAL</span></td></tr>
+  </table>
+</div>
+
+<h3>4c. Browser SSO Behavior</h3>
+<div class="card">
+  <table>
+    <tr><th>Browser</th><th>PRT SSO</th><th>Notes</th></tr>
+    <tr><td style="color:var(--text-primary);">Microsoft Edge</td><td><span class="status status-yes">YES</span></td><td>Native WAM integration</td></tr>
+    <tr><td style="color:var(--text-primary);">Google Chrome</td><td><span class="status status-yes">YES</span></td><td>Requires Windows Accounts extension</td></tr>
+    <tr><td style="color:var(--text-primary);">Private / Incognito Mode</td><td><span class="status status-no">NO</span></td><td>PRT is NOT injected in private browsing</td></tr>
+  </table>
+  <p style="color:var(--text-muted); font-size:0.85rem; margin-top:8px;">MSP technicians should use standard browser profiles (not private/incognito) for Lighthouse access to benefit from PRT-based SSO and device compliance claims.</p>
+</div>
+
+</div>
+
+<footer style="text-align:center; padding:24px; color:var(--text-muted); font-size:0.8rem; border-top:1px solid var(--border-color);">
+  Based on Microsoft Learn documentation, CISA advisories, and CyberArk documentation. Research date: 2026-03-30.
+</footer>
+</body>
+</html>

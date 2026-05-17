@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Securing Microsoft Lighthouse for MSP Partners -- Best Practices</title>
+<style>
+  :root {
+    --bg-primary: #0d1117;
+    --bg-surface: #161b22;
+    --bg-elevated: #1c2129;
+    --border-color: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --accent-blue: #58a6ff;
+    --accent-green: #3fb950;
+    --accent-yellow: #d29922;
+    --accent-red: #f85149;
+    --accent-purple: #bc8cff;
+    --accent-orange: #d18616;
+    --accent-teal: #39d2c0;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', system-ui, sans-serif; background: var(--bg-primary); color: var(--text-primary); line-height: 1.7; }
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px 60px; }
+  header { background: linear-gradient(135deg, #0d1b2a 0%, #1b263b 50%, #0d1117 100%); border-bottom: 3px solid var(--accent-teal); padding: 40px 24px; text-align: center; }
+  header h1 { font-size: 2rem; font-weight: 700; margin-bottom: 8px; }
+  header .subtitle { color: var(--text-secondary); font-size: 1.1rem; }
+  header .meta { color: var(--text-muted); font-size: 0.85rem; margin-top: 12px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .badge-bp { background: #0d2d2d; color: var(--accent-teal); }
+  h2 { font-size: 1.5rem; font-weight: 600; margin: 48px 0 20px; padding-bottom: 8px; border-bottom: 2px solid var(--border-color); color: var(--accent-teal); }
+  h3 { font-size: 1.15rem; font-weight: 600; margin: 28px 0 12px; color: var(--text-primary); }
+  h4 { font-size: 1rem; font-weight: 600; margin: 20px 0 8px; color: var(--accent-blue); }
+  p { color: var(--text-secondary); margin-bottom: 12px; }
+  .card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 24px; margin: 16px 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 0.9rem; }
+  th { background: var(--bg-elevated); text-align: left; padding: 10px 14px; border-bottom: 2px solid var(--border-color); font-weight: 600; color: var(--accent-teal); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { padding: 10px 14px; border-bottom: 1px solid var(--border-color); color: var(--text-secondary); }
+  tr:hover td { background: rgba(57, 210, 192, 0.04); }
+  .status { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+  .status-req { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }
+  .status-rec { background: rgba(210, 153, 34, 0.15); color: var(--accent-yellow); }
+  .status-opt { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }
+  .status-yes { background: rgba(63, 185, 80, 0.15); color: var(--accent-green); }
+  .status-no { background: rgba(248, 81, 73, 0.15); color: var(--accent-red); }
+  .alert { border-radius: 8px; padding: 16px 20px; margin: 16px 0; border-left: 4px solid; }
+  .alert-red { background: rgba(248, 81, 73, 0.08); border-color: var(--accent-red); }
+  .alert-yellow { background: rgba(210, 153, 34, 0.08); border-color: var(--accent-yellow); }
+  .alert-blue { background: rgba(88, 166, 255, 0.08); border-color: var(--accent-blue); }
+  .alert-green { background: rgba(63, 185, 80, 0.08); border-color: var(--accent-green); }
+  .alert-teal { background: rgba(57, 210, 192, 0.08); border-color: var(--accent-teal); }
+  .alert-title { font-weight: 700; margin-bottom: 4px; }
+  .alert-red .alert-title { color: var(--accent-red); }
+  .alert-yellow .alert-title { color: var(--accent-yellow); }
+  .alert-blue .alert-title { color: var(--accent-blue); }
+  .alert-green .alert-title { color: var(--accent-green); }
+  .alert-teal .alert-title { color: var(--accent-teal); }
+  .code-block { background: #0d1117; border: 1px solid var(--border-color); border-radius: 6px; padding: 16px; margin: 12px 0; overflow-x: auto; font-family: 'SF Mono', 'Cascadia Code', 'Consolas', monospace; font-size: 0.85rem; line-height: 1.5; color: #e6edf3; white-space: pre; }
+  .code-label { font-size: 0.8rem; font-weight: 600; color: var(--accent-purple); margin-bottom: 4px; }
+  .steps { counter-reset: step; margin: 16px 0; }
+  .step { display: flex; gap: 16px; margin: 14px 0; align-items: flex-start; }
+  .step-num { flex-shrink: 0; width: 32px; height: 32px; border-radius: 50%; background: var(--accent-teal); color: #000; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85rem; }
+  .step-content { flex: 1; }
+  .step-content strong { color: var(--text-primary); }
+  .checklist { list-style: none; padding: 0; margin: 12px 0; }
+  .checklist li { padding: 8px 0 8px 28px; position: relative; color: var(--text-secondary); border-bottom: 1px solid rgba(48, 54, 61, 0.5); font-size: 0.9rem; }
+  .checklist li::before { content: ''; position: absolute; left: 4px; top: 12px; width: 14px; height: 14px; border: 2px solid var(--border-color); border-radius: 3px; }
+  .section-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; margin: 16px 0; }
+  .section-card { background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; border-top: 3px solid; }
+  .section-card h4 { margin-top: 0; }
+  details { margin: 12px 0; }
+  summary { cursor: pointer; padding: 12px 16px; background: var(--bg-surface); border: 1px solid var(--border-color); border-radius: 8px; font-weight: 600; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "+ "; color: var(--accent-teal); font-weight: 700; }
+  details[open] summary::before { content: "- "; }
+  details[open] summary { border-radius: 8px 8px 0 0; border-bottom-color: transparent; }
+  .detail-content { padding: 16px; background: var(--bg-surface); border: 1px solid var(--border-color); border-top: none; border-radius: 0 0 8px 8px; }
+  @media (max-width: 768px) { header h1 { font-size: 1.5rem; } .section-grid { grid-template-columns: 1fr; } }
+  @media print { body { background: #fff; color: #111; } .card, .section-card, summary, .detail-content { background: #f8f8f8; border-color: #ddd; } header { background: #f0f0f0; border-color: #333; } h2, h3, h4, header h1 { color: #111; } th { background: #e8e8e8; color: #111; } td, p { color: #333; } .code-block { background: #f5f5f5; color: #111; } }
+</style>
+</head>
+<body>
+<header>
+  <div style="margin-bottom:8px;"><span class="badge badge-bp">Best Practices</span></div>
+  <h1>Securing Microsoft Lighthouse for MSP Partners</h1>
+  <div class="subtitle">SAML/OIDC Integrations | Sentinel | Purview | Defender | Security Hardening</div>
+  <div class="meta">Prepared 2026-04-07 | For MSP Security Architects Planning Azure Service Integrations</div>
+</header>
+
+<div class="container">
+
+<!-- ==================== INTRO ==================== -->
+<h2>Document Purpose</h2>
+<p>This guide covers best practices for an MSP partner planning to secure their Lighthouse/GDAP deployment while integrating Azure SAML/OIDC-based applications, standing up Microsoft Sentinel for multi-tenant monitoring, configuring Purview for compliance visibility, and deploying Defender services across customer tenants. Each section addresses the security implications specific to the MSP delegated access model.</p>
+
+<div class="alert alert-teal">
+  <div class="alert-title">Scope</div>
+  <p>This document assumes GDAP is already established (DAP fully deprecated as of July 2024). It focuses on <strong>securing the operational environment</strong> around Lighthouse, not the initial GDAP setup. For GDAP setup SOPs, see the companion SOP template.</p>
+</div>
+
+<!-- ==================== SECTION 1: PARTNER TENANT HARDENING ==================== -->
+<h2>1. Partner Tenant Hardening (Foundation)</h2>
+<p>The MSP's own Entra ID tenant is the single most critical security boundary. Every customer tenant is reachable through it. Harden it first.</p>
+
+<h3>1a. Identity Security Baseline</h3>
+<div class="card">
+  <ul class="checklist">
+    <li><strong>Phishing-resistant MFA for all admin accounts</strong> -- FIDO2 security keys or Windows Hello for Business. Microsoft Authenticator push is not phishing-resistant. GDAP mandates MFA in the home tenant, and that MFA claim is always trusted by customer tenants (hardcoded -- customers cannot override this).</li>
+    <li><strong>Separate admin and productivity accounts</strong> -- Technicians should never use their daily email account for GDAP access. Create dedicated <code>adm-*@partner.com</code> accounts for administrative work.</li>
+    <li><strong>PIM for Groups on ALL GDAP security groups</strong> -- Convert all standing membership to eligible-only. No technician should hold active GDAP group membership by default. Requires Entra ID P2 in the partner tenant.</li>
+    <li><strong>Emergency access (break-glass) accounts</strong> -- At least 2, excluded from Conditional Access, stored in a monitored safe with alerting on sign-in. Rotate credentials quarterly.</li>
+    <li><strong>Conditional Access baseline in the partner tenant</strong> -- Block legacy authentication, require compliant devices for admin portals, enforce sign-in risk policies (Entra ID Protection P2).</li>
+    <li><strong>Disable self-service password reset for admin accounts</strong> -- Prevent social engineering password resets on accounts with GDAP access.</li>
+    <li><strong>Token protection (preview)</strong> -- Enable for admin accounts when GA. Binds tokens to the issuing device, preventing token replay from a different machine.</li>
+  </ul>
+</div>
+
+<h3>1b. Device Trust for MSP Technicians</h3>
+<div class="card">
+  <table>
+    <tr><th>Requirement</th><th>Why</th><th>Implementation</th></tr>
+    <tr><td style="color:var(--text-primary);">TPM 2.0 on all admin devices</td><td>PRT session key bound to TPM hardware -- prevents pass-the-PRT attacks</td><td>Enforce via Intune compliance policy</td></tr>
+    <tr><td style="color:var(--text-primary);">Entra-joined (not hybrid-joined)</td><td>Synchronous PRT issuance at login, tighter cloud-native security model</td><td>Entra join during OOBE or Autopilot</td></tr>
+    <tr><td style="color:var(--text-primary);">Intune-managed with compliance policy</td><td>Customers can require device compliance via cross-tenant trust settings</td><td>Deploy baseline compliance policy (BitLocker, firewall, AV, OS version)</td></tr>
+    <tr><td style="color:var(--text-primary);">Credential Guard enabled</td><td>Process isolation prevents LSASS memory scraping for PRT extraction</td><td>Enable via Intune endpoint protection profile</td></tr>
+    <tr><td style="color:var(--text-primary);">EDR (Defender for Endpoint)</td><td>Detect anomalous behavior on admin devices; required by most cyber insurers</td><td>Onboard via Intune; configure ASR rules</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 2: SAML/OIDC INTEGRATIONS ==================== -->
+<h2>2. Azure SAML/OIDC Integration Security</h2>
+<p>When the MSP partner sets up SAML or OIDC-based application integrations in customer tenants via GDAP, several security considerations apply.</p>
+
+<h3>2a. App Registration and Enterprise Application Governance</h3>
+<div class="card">
+  <h4>GDAP Roles Required</h4>
+  <table>
+    <tr><th>Task</th><th>Minimum Role</th><th>Tier</th></tr>
+    <tr><td style="color:var(--text-primary);">Register new applications</td><td>Application Administrator</td><td><span class="status status-req">Tier 3 -- JIT</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Configure SSO (SAML/OIDC)</td><td>Application Administrator or Cloud Application Administrator</td><td><span class="status status-req">Tier 3 -- JIT</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Grant admin consent for permissions</td><td>Privileged Role Administrator (for app-level) or Cloud Application Administrator</td><td><span class="status status-req">Tier 3 -- JIT</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Assign users/groups to apps</td><td>User Administrator or Application Administrator</td><td><span class="status status-rec">Tier 2</span></td></tr>
+    <tr><td style="color:var(--text-primary);">View app configurations (read-only)</td><td>Global Reader</td><td><span class="status status-opt">Tier 1</span></td></tr>
+  </table>
+</div>
+
+<div class="alert alert-red">
+  <div class="alert-title">CRITICAL: Application Administrator is a Tier 3 Role</div>
+  <p>Application Administrator can create credentials for any application, including those with privileged Graph API permissions. This is effectively a privilege escalation path. <strong>Never assign this as standing access.</strong> Use PIM with human approver, max 1-hour activation, and mandatory justification referencing a change ticket.</p>
+</div>
+
+<h3>2b. SAML Configuration Best Practices</h3>
+<div class="card">
+  <ul class="checklist">
+    <li><strong>Use the Entra ID Gallery app template when available</strong> -- Pre-configured claim mappings reduce misconfiguration risk. Gallery apps get Microsoft's SSO testing and documentation.</li>
+    <li><strong>Configure SAML token signing with SHA-256</strong> -- Default for new configurations. Verify the signing algorithm is not SHA-1 on legacy configurations.</li>
+    <li><strong>Set token encryption if the SaaS vendor supports it</strong> -- Encrypts SAML assertions in transit. Requires the vendor to provide their public certificate.</li>
+    <li><strong>Configure appropriate NameID format</strong> -- Use <code>user.userprincipalname</code> for most SaaS apps. Avoid <code>user.mail</code> if UPN and email differ (common in hybrid environments).</li>
+    <li><strong>Require user assignment</strong> -- On the Enterprise Application properties, set "Assignment required?" to Yes. This prevents any authenticated user from accessing the app -- only explicitly assigned users/groups can SSO.</li>
+    <li><strong>Scope Conditional Access per application</strong> -- Create CA policies targeting specific enterprise applications rather than "All cloud apps" when the app warrants additional controls (MFA step-up, device compliance, location restrictions).</li>
+    <li><strong>Test with a pilot group before broad rollout</strong> -- Assign a small test group, verify claims, then expand.</li>
+  </ul>
+</div>
+
+<h3>2c. OIDC/OAuth Best Practices</h3>
+<div class="card">
+  <ul class="checklist">
+    <li><strong>Prefer OIDC over SAML for new integrations</strong> -- OIDC uses JWTs with shorter lifetimes, supports PKCE for public clients, and integrates better with modern SPA/mobile architectures.</li>
+    <li><strong>Use certificate credentials for confidential clients, not client secrets</strong> -- Client secrets can be leaked; certificates provide stronger proof-of-possession. Rotate certificates before expiry (set calendar reminders).</li>
+    <li><strong>Scope API permissions to minimum required</strong> -- Never grant <code>Directory.ReadWrite.All</code> when <code>User.Read</code> suffices. Audit existing permissions quarterly.</li>
+    <li><strong>Admin consent workflow</strong> -- Enable the admin consent workflow in the customer tenant so end-users can request permissions rather than self-consenting to apps. This prevents OAuth consent phishing attacks.</li>
+    <li><strong>Monitor app consent grants</strong> -- Use Sentinel or Purview audit logs to detect new admin consent grants. Alert on <code>Consent to application</code> events, especially for high-privilege Graph scopes like <code>Mail.ReadWrite</code>, <code>Files.ReadWrite.All</code>, <code>RoleManagement.ReadWrite.Directory</code>.</li>
+  </ul>
+</div>
+
+<div class="alert alert-yellow">
+  <div class="alert-title">OAuth Consent Phishing -- MSP Attack Vector</div>
+  <p>Attackers create malicious app registrations that request broad permissions. If an admin in the customer tenant grants consent (or if the tenant allows user self-consent), the attacker gains persistent API access. MSPs should: (1) disable user consent for apps in customer tenants, (2) enable the admin consent workflow, (3) alert on new admin consent events in Sentinel.</p>
+</div>
+
+<h3>2d. Cross-Tenant App Considerations</h3>
+<p>When the MSP deploys multi-tenant applications that need to access customer tenant data (e.g., monitoring dashboards, reporting tools):</p>
+<div class="card">
+  <ul class="checklist">
+    <li><strong>Register the app as multi-tenant in the partner tenant</strong> -- Set "Supported account types" to "Accounts in any organizational directory."</li>
+    <li><strong>Customer admin consent is required per tenant</strong> -- The customer must grant admin consent for the app's permissions in their tenant. Document this in your onboarding runbook.</li>
+    <li><strong>Use application permissions (not delegated) for service-to-service</strong> -- Service accounts running background jobs should use certificate-based app authentication, not delegated user tokens.</li>
+    <li><strong>Track app credential expiry</strong> -- Both client secrets and certificates expire. Set monitoring for expiry dates. An expired credential means broken integration with no warning to end users.</li>
+    <li><strong>Document all apps deployed in each customer tenant</strong> -- Maintain an inventory. This is critical for offboarding: when a customer relationship ends, all MSP-deployed apps must be removed.</li>
+  </ul>
+</div>
+
+<!-- ==================== SECTION 3: SENTINEL ==================== -->
+<h2>3. Microsoft Sentinel -- Multi-Tenant MSP Deployment</h2>
+
+<h3>3a. Architecture Decision: Data-Per-Customer vs. Centralized</h3>
+<div class="section-grid">
+  <div class="section-card" style="border-top-color: var(--accent-green);">
+    <h4 style="color:var(--accent-green);">Data-Per-Customer Tenant (Recommended)</h4>
+    <p>Each customer has their own Log Analytics workspace and Sentinel instance. MSP accesses via Azure Lighthouse delegation.</p>
+    <ul style="color:var(--text-secondary); padding-left:18px; font-size:0.9rem;">
+      <li>Customer owns their data and retains full sovereignty</li>
+      <li>Compliance boundaries are clean (data never leaves the customer tenant)</li>
+      <li>Customer can view their own Sentinel without MSP involvement</li>
+      <li>Offboarding is clean -- revoke Azure Lighthouse, data stays with customer</li>
+      <li>Cost attribution per customer is straightforward</li>
+    </ul>
+    <p style="color:var(--accent-green); font-size:0.85rem; font-weight:600; margin-top:12px;">Best for: Most MSP engagements, regulated industries, customers who want data ownership.</p>
+  </div>
+  <div class="section-card" style="border-top-color: var(--accent-yellow);">
+    <h4 style="color:var(--accent-yellow);">Centralized in MSP Tenant</h4>
+    <p>MSP maintains a single Sentinel workspace and ingests data from all customers.</p>
+    <ul style="color:var(--text-secondary); padding-left:18px; font-size:0.9rem;">
+      <li>Simpler SOC operations (one workspace, one set of rules)</li>
+      <li>Cross-customer correlation is native (no cross-workspace queries)</li>
+      <li>Lower operational overhead for small MSPs</li>
+      <li>Customer has no direct access to their own data</li>
+      <li>Data sovereignty issues (customer data in MSP tenant)</li>
+      <li>Offboarding requires data extraction/deletion</li>
+    </ul>
+    <p style="color:var(--accent-yellow); font-size:0.85rem; font-weight:600; margin-top:12px;">Best for: Small MSPs with non-regulated SMB customers who want "fully managed" SIEM.</p>
+  </div>
+</div>
+
+<h3>3b. Azure Lighthouse + Sentinel Setup</h3>
+<p>For the data-per-customer model, Azure Lighthouse provides the cross-tenant access to customer Sentinel workspaces.</p>
+<div class="card">
+  <div class="steps">
+    <div class="step"><div class="step-num">1</div><div class="step-content"><strong>Deploy Azure Lighthouse registration</strong> -- Create an ARM template that defines the MSP's managing tenant ID and role authorizations. Minimum roles: Microsoft Sentinel Reader (for monitoring) + Microsoft Sentinel Responder (for incident management) + Log Analytics Reader (for workspace queries). Use PIM-eligible assignments for Contributor-level roles.</div></div>
+    <div class="step"><div class="step-num">2</div><div class="step-content"><strong>Deploy the template to each customer subscription</strong> -- Customer must accept the delegation. Use the Azure portal "Service providers" blade or ARM template deployment. This is separate from GDAP -- Azure Lighthouse and GDAP are parallel mechanisms for Azure vs. M365 access.</div></div>
+    <div class="step"><div class="step-num">3</div><div class="step-content"><strong>Enable Sentinel data connectors in each customer workspace</strong> -- Requires both Azure Lighthouse delegation AND GDAP roles for M365 data connectors. Key connectors: Microsoft Entra ID (sign-in + audit logs), Microsoft 365 Defender, Microsoft Defender for Cloud, Azure Activity.</div></div>
+    <div class="step"><div class="step-num">4</div><div class="step-content"><strong>Deploy analytics rules from a central repository</strong> -- Use Azure Lighthouse to push standardized detection rules across all customer workspaces. Maintain rules in a Git repo and deploy via Azure DevOps or GitHub Actions.</div></div>
+    <div class="step"><div class="step-num">5</div><div class="step-content"><strong>Configure Lighthouse false-positive suppression</strong> -- Microsoft 365 Lighthouse's background Graph API polling generates events in customer Sentinel workspaces. Create automation rules to suppress these. Filter on the Lighthouse service principal's application ID in the sign-in logs.</div></div>
+  </div>
+</div>
+
+<h3>3c. Critical Sentinel KQL Detections for GDAP Monitoring</h3>
+
+<details>
+  <summary>Detect MSP Partner Sign-Ins (Service Provider Access Type)</summary>
+  <div class="detail-content">
+    <div class="code-label">Baseline: All GDAP partner authentication events</div>
+    <div class="code-block">SigninLogs
+| where CrossTenantAccessType == "serviceProvider"
+| project TimeGenerated, UserDisplayName, UserPrincipalName,
+         IPAddress, Location, HomeTenantId,
+         AppDisplayName, Status, ConditionalAccessStatus
+| sort by TimeGenerated desc</div>
+  </div>
+</details>
+<details>
+  <summary>Detect Partner Sign-Ins from Unexpected Locations</summary>
+  <div class="detail-content">
+    <div class="code-label">Alert when partner access comes from non-US locations (if geo-fenced)</div>
+    <div class="code-block">SigninLogs
+| where CrossTenantAccessType == "serviceProvider"
+| where Location !has "US"
+| project TimeGenerated, UserDisplayName, IPAddress,
+         Location, AppDisplayName, Status
+| sort by TimeGenerated desc</div>
+  </div>
+</details>
+<details>
+  <summary>Detect Privileged Role Activation by Partner Users</summary>
+  <div class="detail-content">
+    <div class="code-label">Monitor PIM activations for GDAP security groups</div>
+    <div class="code-block">AuditLogs
+| where OperationName has_any ("Add member to role", "Add eligible member to role",
+                                "Activate PIM role", "Add member to group")
+| where InitiatedBy.user.userPrincipalName has "#EXT#"
+    or InitiatedBy.user.userPrincipalName == ""
+| extend TargetRole = tostring(TargetResources[0].displayName)
+| project TimeGenerated, OperationName, TargetRole,
+         InitiatedBy, Result
+| sort by TimeGenerated desc</div>
+  </div>
+</details>
+<details>
+  <summary>Detect New Admin Consent Grants (OAuth Phishing Detection)</summary>
+  <div class="detail-content">
+    <div class="code-label">Alert on new application consent -- critical for SAML/OIDC security</div>
+    <div class="code-block">AuditLogs
+| where OperationName == "Consent to application"
+| extend AppName = tostring(TargetResources[0].displayName)
+| extend ConsentedPermissions = tostring(TargetResources[0].modifiedProperties)
+| project TimeGenerated, AppName, ConsentedPermissions,
+         InitiatedBy.user.userPrincipalName, Result
+| sort by TimeGenerated desc</div>
+  </div>
+</details>
+<details>
+  <summary>Cross-Workspace Hunting Across Customer Tenants (up to 20)</summary>
+  <div class="detail-content">
+    <div class="code-label">Unified threat hunting across multiple customer workspaces</div>
+    <div class="code-block">union
+  workspace("customer-a-workspace").SigninLogs,
+  workspace("customer-b-workspace").SigninLogs,
+  workspace("customer-c-workspace").SigninLogs
+| where CrossTenantAccessType == "serviceProvider"
+| where ResultType != "0"  // Failed sign-ins only
+| summarize FailedAttempts = count() by UserPrincipalName,
+            IPAddress, bin(TimeGenerated, 1h)
+| where FailedAttempts > 5</div>
+  </div>
+</details>
+
+<h3>3d. Sentinel Licensing Considerations for MSPs</h3>
+<div class="card">
+  <table>
+    <tr><th>Component</th><th>Cost Model</th><th>Who Pays</th></tr>
+    <tr><td style="color:var(--text-primary);">Log Analytics workspace</td><td>Per GB ingested / per day</td><td>Customer (in their subscription)</td></tr>
+    <tr><td style="color:var(--text-primary);">Sentinel solution</td><td>Per GB analyzed (on top of LA cost)</td><td>Customer</td></tr>
+    <tr><td style="color:var(--text-primary);">Azure Lighthouse</td><td>Free</td><td>N/A</td></tr>
+    <tr><td style="color:var(--text-primary);">Microsoft 365 Lighthouse</td><td>Free (CSP partners)</td><td>N/A</td></tr>
+    <tr><td style="color:var(--text-primary);">Entra ID P2 (for PIM)</td><td>Per user/month</td><td>Partner tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">Entra ID P1 (cross-tenant trust)</td><td>Per user/month</td><td>Customer tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">Microsoft 365 E5 / E5 Security</td><td>Per user/month</td><td>Customer (for advanced Defender features)</td></tr>
+  </table>
+  <p style="color:var(--text-muted); font-size:0.85rem; margin-top:8px;">Tip: Sentinel commitment tiers (100 GB/day, 200, 400, etc.) offer significant discounts. For multi-customer MSPs, consider whether customers individually reach tier thresholds or if a centralized model achieves better pricing.</p>
+</div>
+
+<!-- ==================== SECTION 4: PURVIEW ==================== -->
+<h2>4. Microsoft Purview -- Compliance Monitoring via GDAP</h2>
+
+<h3>4a. What Works and What Doesn't via GDAP</h3>
+<div class="card">
+  <table>
+    <tr><th>Purview Capability</th><th>GDAP Support</th><th>Notes</th></tr>
+    <tr><td style="color:var(--text-primary);">Compliance Manager (assessments, actions)</td><td><span class="status status-yes">Supported</span></td><td>Build/manage assessments, templates, improvement actions</td></tr>
+    <tr><td style="color:var(--text-primary);">Audit log setup and configuration</td><td><span class="status status-yes">Supported</span></td><td>Turn on/off, retention policies, PowerShell search</td></tr>
+    <tr><td style="color:var(--text-primary);">Audit log search (PowerShell)</td><td><span class="status status-yes">Supported</span></td><td><code>Search-UnifiedAuditLog</code> cmdlet works</td></tr>
+    <tr><td style="color:var(--text-primary);">Audit log search (Portal UI)</td><td><span class="status status-no">NOT Supported</span></td><td>Interactive search requires user object in customer directory</td></tr>
+    <tr><td style="color:var(--text-primary);">Data Loss Prevention (DLP) policies</td><td><span class="status status-yes">Supported</span></td><td>Requires Compliance Administrator GDAP role</td></tr>
+    <tr><td style="color:var(--text-primary);">Information Protection (labels)</td><td><span class="status status-yes">Supported</span></td><td>Requires Information Protection Administrator role</td></tr>
+    <tr><td style="color:var(--text-primary);">eDiscovery (cases, searches)</td><td><span class="status status-yes">Supported</span></td><td>Requires eDiscovery Manager or Administrator via GDAP</td></tr>
+    <tr><td style="color:var(--text-primary);">Content Explorer (view actual content)</td><td><span class="status status-yes">Supported</span></td><td>HIGH RISK -- treat as Tier 1/HLA. Requires Content Explorer Content Viewer role.</td></tr>
+    <tr><td style="color:var(--text-primary);">Insider Risk Management</td><td><span class="status status-yes">Supported</span></td><td>Requires IRM role group via GDAP. Highly sensitive.</td></tr>
+  </table>
+</div>
+
+<div class="alert alert-red">
+  <div class="alert-title">Purview Portal Audit Search Gap</div>
+  <p>The interactive "Search audit log" in the Purview compliance portal does NOT work via GDAP. The partner's identity does not exist as a user object in the customer tenant, which the portal requires. <strong>Workarounds:</strong> (1) Use PowerShell <code>Search-UnifiedAuditLog</code>, (2) Ingest audit events via the Office 365 Management Activity API into Sentinel, (3) Create a dedicated service account in the customer tenant for audit access.</p>
+</div>
+
+<h3>4b. Purview Security Considerations for MSP Access</h3>
+<div class="card">
+  <ul class="checklist">
+    <li><strong>Content Explorer access = automatic HLA (High-Level Access)</strong> -- A user with Content Explorer Content Viewer can view the actual contents of files matched by DLP policies, sensitivity labels, and retention labels. This is organization-wide access to sensitive data. Treat with CyberArk PSM session recording or equivalent.</li>
+    <li><strong>Audit Manager = HLA</strong> -- Can modify audit retention policies. A malicious actor with this role can shorten retention periods to cover their tracks. Monitor changes to audit retention settings.</li>
+    <li><strong>eDiscovery Administrator (Tier 1) vs. Manager (Tier 3)</strong> -- eDiscovery Administrator has org-wide access to all cases and can search any mailbox. eDiscovery Manager is scoped to their own cases only. Use Manager where possible; reserve Administrator for escalation.</li>
+    <li><strong>DLP policies can disrupt business</strong> -- A misconfigured DLP policy can block email flow, file sharing, or Teams messages. Require change tickets for DLP modifications. Test in simulation mode before enforcement.</li>
+    <li><strong>Sensitivity labels propagate broadly</strong> -- A published label policy affects all users in scope. Mislabeled data protection policies can lock users out of their own files. Use pilot groups and gradual rollout.</li>
+  </ul>
+</div>
+
+<!-- ==================== SECTION 5: DEFENDER ==================== -->
+<h2>5. Microsoft Defender Suite -- MSP Deployment</h2>
+
+<h3>5a. Defender Components and GDAP Access</h3>
+<div class="card">
+  <table>
+    <tr><th>Defender Product</th><th>GDAP Role Required</th><th>Lighthouse Integration</th></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Endpoint (MDE)</td><td>Security Administrator, Security Reader</td><td><span class="status status-yes">Alerts in Lighthouse</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Office 365 (MDO)</td><td>Security Administrator</td><td><span class="status status-no">NOT in Lighthouse alerts</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Identity (MDI)</td><td>Security Administrator, Security Reader</td><td><span class="status status-no">NOT in Lighthouse alerts</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Cloud Apps (MCAS)</td><td>Security Administrator, Cloud App Security Administrator</td><td><span class="status status-no">NOT in Lighthouse alerts</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Cloud</td><td>Via Azure Lighthouse (Security Reader/Contributor)</td><td><span class="status status-no">NOT in Lighthouse alerts</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Business</td><td>Security Administrator, Security Reader</td><td><span class="status status-yes">Alerts in Lighthouse</span></td></tr>
+    <tr><td style="color:var(--text-primary);">Defender XDR (unified portal)</td><td>Security Administrator, Security Operator, Security Reader</td><td>Accessible via GDAP</td></tr>
+  </table>
+</div>
+
+<div class="alert alert-yellow">
+  <div class="alert-title">Lighthouse Only Surfaces Limited Defender Alerts</div>
+  <p>Only Defender for Business, Defender Antivirus, and Entra ID Protection alerts appear in the Lighthouse portal. For MDO, MDI, MCAS, and Defender for Cloud alerts, you must use the Defender XDR portal (security.microsoft.com) or Sentinel. Plan your SOC workflow accordingly.</p>
+</div>
+
+<h3>5b. Defender Deployment Best Practices</h3>
+<div class="card">
+  <ul class="checklist">
+    <li><strong>Use Lighthouse baselines for consistent Defender deployment</strong> -- Lighthouse provides security baselines that can be pushed to customer tenants. These include Defender policies, CA policies, and device compliance policies. Customize the default baseline for your MSP's standards.</li>
+    <li><strong>Enable Defender for Endpoint via Intune</strong> -- Use Intune device onboarding profiles (available via GDAP with Intune Administrator role). This ensures consistent onboarding across customer device fleets.</li>
+    <li><strong>Configure Attack Surface Reduction (ASR) rules</strong> -- Start in audit mode, monitor for false positives across customer workloads, then move to block mode. ASR rules are the most impactful Defender for Endpoint configuration for SMB customers.</li>
+    <li><strong>Enable Safe Links and Safe Attachments (MDO)</strong> -- For customers with Exchange Online P1/P2 or M365 Business Premium. Deploy via security policies in the Defender portal. These protect against email-borne phishing and malware.</li>
+    <li><strong>Configure MCAS for OAuth app governance</strong> -- Detect when users consent to malicious applications (OAuth consent phishing). Create policies to alert on new app registrations with high-privilege permissions.</li>
+    <li><strong>Deploy Defender for Cloud on Azure subscriptions</strong> -- Via Azure Lighthouse. Enable Defender CSPM (Cloud Security Posture Management) for free tier, or Defender for Servers/Storage/SQL for workload protection. This requires the Azure Lighthouse delegation, not GDAP.</li>
+  </ul>
+</div>
+
+<h3>5c. Multi-Tenant Defender XDR (Preview)</h3>
+<div class="alert alert-blue">
+  <div class="alert-title">Defender XDR Multi-Tenant Management</div>
+  <p>Microsoft has been building native multi-tenant management into the Defender XDR portal (security.microsoft.com). As of early 2026, GDAP-based access in the Defender portal is expanding via a consent-based model. This allows MSPs to manage Sentinel and Defender incidents across customer tenants from a single Defender portal session, as an alternative to the Azure Lighthouse model. Monitor Microsoft's announcements for GA status.</p>
+</div>
+
+<!-- ==================== SECTION 6: CONDITIONAL ACCESS ==================== -->
+<h2>6. Conditional Access -- Customer-Side Partner Controls</h2>
+<p>These are policies the <strong>customer</strong> deploys to secure MSP access. As the MSP, recommend these to your customers and help them implement.</p>
+
+<h3>6a. Recommended Customer CA Policy Set</h3>
+<div class="card">
+  <table>
+    <tr><th>Policy</th><th>Target</th><th>Grant/Block</th><th>Priority</th></tr>
+    <tr>
+      <td style="color:var(--text-primary);">Require phishing-resistant MFA for partners</td>
+      <td>Service provider user type (MSP tenant ID)</td>
+      <td>Require authentication strength: Phishing-resistant MFA</td>
+      <td><span class="status status-req">CRITICAL</span></td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Block partner access from non-US locations</td>
+      <td>Service provider user type (MSP tenant ID)</td>
+      <td>Block -- Exclude "United States" Named Location</td>
+      <td><span class="status status-req">HIGH</span></td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Require compliant device for partner access</td>
+      <td>Service provider user type (MSP tenant ID)</td>
+      <td>Require device to be marked as compliant</td>
+      <td><span class="status status-rec">HIGH</span></td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">4-hour sign-in frequency for partner sessions</td>
+      <td>Service provider user type (MSP tenant ID)</td>
+      <td>Session: Sign-in frequency = 4 hours</td>
+      <td><span class="status status-rec">HIGH</span></td>
+    </tr>
+    <tr>
+      <td style="color:var(--text-primary);">Non-persistent browser for partner sessions</td>
+      <td>Service provider user type (MSP tenant ID)</td>
+      <td>Session: Persistent browser session = Never</td>
+      <td><span class="status status-rec">MEDIUM</span></td>
+    </tr>
+  </table>
+</div>
+
+<div class="alert alert-yellow">
+  <div class="alert-title">Customer Cross-Tenant Trust Prerequisites</div>
+  <p>For device compliance policies to work, the customer must enable "Trust compliant devices" in their cross-tenant access inbound settings. Without this, the customer's CA policy will block all MSP technicians because their devices are enrolled in the MSP's Intune, not the customer's. Similarly, "Trust multifactor authentication" enables MFA claim passthrough (though GDAP always trusts partner MFA regardless). These settings require <strong>Entra ID P1</strong> in the customer tenant.</p>
+</div>
+
+<!-- ==================== SECTION 7: OPERATIONAL SECURITY ==================== -->
+<h2>7. Operational Security Practices</h2>
+
+<h3>7a. Change Management for Customer Tenant Modifications</h3>
+<div class="card">
+  <ul class="checklist">
+    <li><strong>All SAML/OIDC app registrations require a change ticket</strong> -- Document the app name, vendor, permissions requested, business justification, and approver. This creates an audit trail and prevents unauthorized app deployments.</li>
+    <li><strong>DLP and sensitivity label changes require simulation mode first</strong> -- Never deploy enforcement-mode DLP to production without a simulation period. Broken DLP rules can halt business operations.</li>
+    <li><strong>Sentinel analytics rule changes tracked in Git</strong> -- Use infrastructure-as-code for Sentinel rules. Deploy via CI/CD pipeline. This provides version control, peer review, and rollback capability.</li>
+    <li><strong>Quarterly GDAP relationship review</strong> -- Review all active relationships. Verify role sets still match SOW. Remove relationships for departed customers. Check for relationships approaching expiry.</li>
+    <li><strong>Annual penetration test of the partner tenant</strong> -- Scope should include: credential phishing simulation, PIM bypass attempts, GDAP blast radius assessment, and device compliance policy testing.</li>
+  </ul>
+</div>
+
+<h3>7b. Monitoring and Alerting Summary</h3>
+<div class="card">
+  <table>
+    <tr><th>What to Monitor</th><th>Where</th><th>Alert Threshold</th></tr>
+    <tr><td style="color:var(--text-primary);">Partner sign-ins from unexpected locations</td><td>Sentinel (customer workspace)</td><td>Any non-US IP (if geo-fenced)</td></tr>
+    <tr><td style="color:var(--text-primary);">Failed partner authentication attempts</td><td>Sentinel (customer workspace)</td><td>&gt;5 failures in 1 hour from same UPN</td></tr>
+    <tr><td style="color:var(--text-primary);">New admin consent grants</td><td>Sentinel or Purview audit</td><td>Any new consent event</td></tr>
+    <tr><td style="color:var(--text-primary);">GDAP relationship changes</td><td>Partner Center activity log</td><td>Any creation/termination/expiry</td></tr>
+    <tr><td style="color:var(--text-primary);">PIM role activations (Tier 3)</td><td>Entra Identity Governance</td><td>Any Tier 3 activation</td></tr>
+    <tr><td style="color:var(--text-primary);">App registration modifications</td><td>Entra audit logs</td><td>Any credential added to existing app</td></tr>
+    <tr><td style="color:var(--text-primary);">Audit retention policy changes</td><td>Purview audit / Sentinel</td><td>Any modification (possible cover-tracks)</td></tr>
+    <tr><td style="color:var(--text-primary);">DLP policy changes</td><td>Purview audit / Sentinel</td><td>Any enforcement mode change</td></tr>
+    <tr><td style="color:var(--text-primary);">Break-glass account usage</td><td>Sentinel (partner workspace)</td><td>Any sign-in event</td></tr>
+  </table>
+</div>
+
+<!-- ==================== SECTION 8: QUICK REF ==================== -->
+<h2>8. Quick Reference: License Requirements</h2>
+<div class="card">
+  <table>
+    <tr><th>Capability</th><th>License</th><th>Where Required</th></tr>
+    <tr><td style="color:var(--text-primary);">PIM for Groups (GDAP JIT)</td><td>Entra ID P2 or M365 E5</td><td>Partner tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">Cross-tenant access settings customization</td><td>Entra ID P1</td><td>Customer tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">Conditional Access (custom policies)</td><td>Entra ID P1</td><td>Customer tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">Entra ID Protection (risk-based policies)</td><td>Entra ID P2</td><td>Both tenants (where used)</td></tr>
+    <tr><td style="color:var(--text-primary);">Microsoft Sentinel</td><td>Pay-per-GB (Log Analytics + Sentinel)</td><td>Customer subscription</td></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Endpoint P2</td><td>M365 E5 / E5 Security / standalone</td><td>Customer tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">Defender for Office 365 P1</td><td>M365 Business Premium or standalone</td><td>Customer tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">Purview Audit Premium (1yr retention)</td><td>M365 E5 Compliance or standalone</td><td>Customer tenant</td></tr>
+    <tr><td style="color:var(--text-primary);">Microsoft 365 Lighthouse</td><td>Free</td><td>Partner (CSP enrollment)</td></tr>
+    <tr><td style="color:var(--text-primary);">Azure Lighthouse</td><td>Free</td><td>Both tenants</td></tr>
+  </table>
+</div>
+
+</div>
+
+<footer style="text-align:center; padding:24px; color:var(--text-muted); font-size:0.8rem; border-top:1px solid var(--border-color);">
+  Based on Microsoft Learn documentation, CISA AA22-131A, and MSP security best practices. Research date: 2026-04-07.
+</footer>
+</body>
+</html>
